@@ -154,6 +154,18 @@ ageIni <- xd[findInterval(ri, cumw)]
 par(mfrow = c(1, 1))
 hist(ageIni, freq = FALSE)
 
+# Cumulative age structure:
+cumw <- cumsum(w) / sum(w)
+plot(xd, cumw)
+
+# Simulate ages at death:
+ri <- runif(n = Nini, min = min(cumw), max = max(cumw))
+ageIni <- xd[findInterval(ri, cumw)]
+
+# Plot histogram of X:
+par(mfrow = c(1, 1))
+hist(ageIni, freq = FALSE)
+
 # ---------------------------- #
 # Simulate single life course:
 # ---------------------------- #
@@ -163,10 +175,10 @@ xpop <- x[idsx]
 Sxpop <- Sx[idsx]
 Fxpop <- 1 - Sx
 idgx <- which(x >= alpha & which(Sx > 0)[1] + 1)
-gxpop <- gx[idgx]
 xg <- x[idgx]
+gxpop <- gx[idgx]
 
-# Longevity for ith ind.:
+# Death date:
 Xini <- sapply(1:Nini, function(i) {
   idi <- which(xpop >= ageIni[i])
   ri <- runif(n = 1, Fxpop[idi[1]], 1)
@@ -176,108 +188,94 @@ Xini <- sapply(1:Nini, function(i) {
 
 # Birth date:
 Bini <- 0 - ageIni
+Dini <- Bini + Xini
 
 # Longevity table:
 longdat <- data.frame(ID = 1:Nini, birthDate = Bini, entryDate = 0, 
-                      departDate = 0 - ageIni, departType = rep("D", Nini), 
+                      departDate = Dini, departType = rep("D", Nini), 
                       ageEntry = ageIni, ageDeath = Xini, 
                       parent = rep(NA, Nini))
 
-# Logical to continue simulating:
-CONT <- TRUE
-
-# index counter:
+# Start individual counter:
 i <- 0
 
-# Start time:
-Start <- Sys.time()
-while (CONT) {
-  
-  # Update index:
+# Logical to continue with loop:
+iCONT <- TRUE
+while (iCONT) {
+  # Update ind. counter:
   i <- i + 1
   
   if (nrow(longdat) < i) {
     CONT <- FALSE
   } else {
-    # Age at time t:
-    Xit <- longdat$ageEntry[i]
-    
-    # Age at death or departure:
+    # Extract dates and ages for ind. i:
+    Ai <- longdat$ageEntry[i]
+    if (Ai > alpha) {
+      ti <- longdat$entryDate[i]
+      xt <- Ai
+    } else {
+      ti <- longdat$entryDate[i] + alpha - Ai
+      xt <- alpha
+    }
+    Bi <- longdat$birthDate[i]
+    Di <- longdat$departDate[i]
     Xi <- longdat$ageDeath[i]
+    ibi <- NA
     
-    # Initialize IBI:
-    ibit <- NA
-    
-    # Initialize time:
-    ti <- longdat$entryDate[i]
-    
-    # reproductive counter:
+    # Start reproductive events counter:
     irep <- 0
     
-    if (Xi > alpha) {
-      ialive <- TRUE
-      while(ialive) {
-        irep <- irep + 1
-        idxi <- findInterval(Xit, xd)
-        if (Xit < alpha & ti <= Nyears) {
-          if (Xit == 0) {
-            ievent <- "B"
+    while (xt < Xi) {
+      # Age at time ti:
+      if (xt == alpha) {
+        wi <- rexp(n = 1, rate = gamma)
+        xt <- xt + wi
+        ti <- ti + wi
+        r1i <- 1
+      } else {
+        ibi <- tau + rexp(n = 1, rate = eta)
+        xt <- xt + ibi
+        ti <- ti + ibi
+        r1i <- 0
+      }
+      
+      # Birth event:
+      idgxi <- findInterval(xt, xg)
+      yit <- rpois(n = 1, lambda = gxpop[idgxi])
+      reprtemp <- data.frame(ID = i, age = xt, offsp = yit, IBI = ibi, 
+                             time = ti, stage = "A", event = "R", first = r1i)
+      irep <- irep + 1
+      if (i == 1 & irep == 1) {
+        reprdat <- reprtemp
+      } else {
+        reprdat <- rbind(reprdat, reprtemp)
+      }
+      
+      # Offspring longevity:
+      if (yit > 0) {
+        for (j in 1:yit) {
+          Bj <- ti
+          Ej <- ti
+          rj <- runif(n = 1)
+          Xj <- xpop[findInterval(rj, Fxpop)]
+          Dj <- Bj + Xj
+          if (Dj > Tmax) {
+            Dj <- Tmax
+            depj <- "C"
           } else {
-            ievent <- "E"
+            depj <- "D"
           }
-          reprtemp <- data.frame(ID = i, age = Xit, offsp = NA, IBI = NA, 
-                                 time = ti, stage = "J", event = ievent)
-          ibit <- alpha - Xit
-        } else {
-          yi <- rpois(n = 1, lambda = gxpop[idxi])
-          reprtemp <- data.frame(ID = i, age = Xit, offsp = yi, IBI = ibit, 
-                                 time = ti, stage = "A", event = "R")
-          ibit <- tau + rexp(n = 1, rate = eta)
-          
-          # Fill up longevity data for new offspring:
-          if (yi > 0) {
-            for (j in 1:yi) {
-              ri <- runif(n = 1, 0, 1)
-              xii <- xpop[findInterval(ri, Fxpop)]
-              if (ti + xii > Nyears) {
-                depDate <- Nyears
-                depi <- "C"
-              } else {
-                depDate <- ti + xii
-                depi <- "D"
-              }
-              
-              longtemp <- data.frame(ID = max(longdat$ID) + 1, 
-                                     birthDate = ti, entryDate = ti, 
-                                     departDate = depDate, departType = depi, 
-                                     ageEntry = 0, ageDeath = xii, parent = i)
-              longdat <- rbind(longdat, longtemp)
-            }
-          }
-        }
-        if (i == 1 & irep == 1) {
-          reprdat <- reprtemp
-        } else {
-          reprdat <- rbind(reprdat, reprtemp)
-        }
-        if (Xit + ibit > Xi | ti + ibit > Nyears) {
-          ialive <- FALSE
-          ti <- ti + Xi - Xit
-        } else {
-          Xit <- Xit + ibit
-          ti <- ti + ibit
+          longtemp <- data.frame(ID = max(longdat$ID) + 1, 
+                                 birthDate = Bj, entryDate = Ej, 
+                                 departDate = Dj, departType = depj, 
+                                 ageEntry = 0, ageDeath = Xj, parent = i)
+          longdat <- rbind(longdat, longtemp)
         }
       }
-      # ibit <- reprtemp$time + (Xi - Xit)
     }
-    
-    reprtemp <- data.frame(ID = i, age = Xi, offsp = NA, IBI = NA, time = ti,
-                           stage = "A", event = "D")
-    reprdat <- rbind(reprdat, reprtemp)
-    
-    CONT <- !all(longdat$birthDate[i:nrow(longdat)] > Nyears - alpha) 
+    # Stop loop if all remaining individuals were born after Tmax - alpha:
+    iCONT <- !all(longdat$birthDate[i:nrow(longdat)] > Tmax - alpha) 
   }
-  # CONT <- i < 1200
 }
 End <- Sys.time()
 
