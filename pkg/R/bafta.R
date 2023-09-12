@@ -2,523 +2,932 @@
 # PACKAGE: BaFTA
 # AUTHOR: Fernando Colchero
 # DATE:
-# DESCRIPTION: Functions to estimate average age-specific fecundity from
+# DESCRIPTION: Functions to estimate average age-specific fertility from
 #              alternative model with mixed effects for repeated individuals.
-# COMMENTS: dataType: aggregated ("aggr"), individual yearly ("indYear"), 
-#                     individual continuous ("indCont").
+# COMMENTS: dataType: aggregated ("aggregated"), individual seasonal 
+#           ("indivSimple"), individual continuous age with IBI 
+#           ("indivExtended").
 # ============================== START CODE ================================== #
 # ======================================== #
 # A) FUNCTIONS AVAILABLE TO THE USER: ==== 
 # ======================================== #
 
-# A.1) Data check function:
-# ------------------------- #
-
-
-# A.2) main bafta function:
-# ------------------------- #
+# Main bafta function:
 bafta <- function(object, ...) UseMethod("bafta")
 
-bafta.default <- function(object, dataType = "indYear", formula = NULL, 
-                          model = "quadratic", minAge = 0, niter = 11000, 
-                          burnin = 1001, thinning = 20, nsim = 1, 
-                          parallel = FALSE, ncpus = 2, 
-                          updateJumps = TRUE, ...) {
+bafta.default <- function(object, dataType = "aggregated",
+                          model = "quadratic", minAge = NA, gestTime = NA, 
+                          niter = 55000, burnin = 5001, thinning = 20, 
+                          nsim, ncpus, UPDJUMP = TRUE, jumpSD = NULL, ...) {
+  # Extract arguments:
+  argList <- list(...)
+  argNames <- names(argList)
   
-  # ------------------- #
-  # General data setup:
-  # ------------------- #
-  # Algorithm information:
-  algObj <- .CreateAlgObj(model, dataType, formula, niter, burnin,
-                          thinning, updateJumps, nsim, minAge)
+  # Start timer:
+  Start <- Sys.time()
   
-  # Dataset object:
-  dataObj <- .CreateDataObj(object, algObj)
+  # Fertility models:
+  models <- c("quadratic", "PeristeraKostaki", "ColcheroMuller", 
+              "Hadwiger", "gamma", "beta", "skewNormal", 'gammaMixture',
+              "HadwigerMixture", "skewSymmetric", "skewLogistic")
+  nmods <- length(models)
+  modList <- paste(paste("'", models, "'", sep = ""), collapse = ", ")
   
-  # Covariate object:
-  covObj <- .CreateCovObj(object, dataObj, algObj)
+  # Data types:
+  dTypes <- c("aggregated", "indivSimple", "indivExtended")
+  dTypeList <- paste(paste("'", dTypes, "'", sep = ""), collapse = ", ")
   
+  # Check model argument:
+  if (!model %in% models) {
+    stop(sprintf("Wrong model specification. Available models are: %s.\n", 
+                 modList))
+  } else {
+    # Create fertility functions:
+    FertFun <- function(beta, ...) UseMethod("FertFun")
+    FertFun.matrix <- .DefineFertilityMatrix(modelFert = model)
+    FertFun.numeric <- .DefineFertilityNumeric(modelFert = model)
+  }
   
+  # check dataType argument:
+  if (!dataType %in% dTypes) {
+    stop(sprintf("Wrong dataType specification. Available data types are: %s.\n", 
+                 dTypeList))
+  }
+  
+  # Logical for random effects in fertility:
+  if (grepl("indiv", dataType)) {
+    RANDEFFU <- TRUE
+  } else {
+    RANDEFFU <- FALSE
+  }
+  
+  # Logical for random effects in IBI:
+  if (dataType == "indivExtended") {
+    RANDEFFV <- TRUE
+  } else {
+    RANDEFFV <- FALSE
+  }
+  
+  # Create algorithm object:
+  algObj <- .CreateAlgObj(model, dataType, minAge, gestTime, formula, niter, 
+                          burnin, nsim, thinning, UPDJUMP, jumpSD)
+  
+  # Create data object:
+  dataObj <- .CreateDataObj(object = object, algObj = algObj)
+  
+  # Create parameter object:
+  parObj <- .BuildParObj(algObj = algObj, dataObj = dataObj)
+  
+  # Number of iterations kept for inference:
+  keep <- seq(burnin, niter, thinning)
+  
+  # Verify if starting parameters are specified:
+  if ("thetaStart" %in% argNames) {
+    if (length(argList$thetaStart) != parObj$p) {
+      stop(sprintf("Length of 'thetaStart' argument should be %s.\n", parObj$p))
+    } else {
+      parObj$thetaStart <- argList$thetaStart
+      names(parObj$thetaStart) <- parObj$thetaName
+    }
+  }
+  
+  # Verify if mean priors are specified:
+  if ("thetaPriorMean" %in% argNames) {
+    if (length(argList$thetaPriorMean) != parObj$p) {
+      stop(sprintf("Length of 'thetaPriorMean' argument should be %s.\n", parObj$p))
+    } else {
+      parObj$thetaPriorMean <- argList$thetaPriorMean
+      names(parObj$thetaPriorMean) <- parObj$thetaName
+    }
+  }
+  
+  # Verify if SD priors are specified:
+  if ("thetaPriorSD" %in% argNames) {
+    if (length(argList$thetaPriorSD) != parObj$p) {
+      stop(sprintf("Length of 'thetaPriorSD' argument should be %s.\n", 
+                   parObj$p))
+    } else {
+      parObj$thetaPriorSD <- argList$thetaPriorSD
+      names(parObj$thetaPriorSD) <- parObj$thetaName
+    }
+  }
+  
+  # Run jump sd:
+  if (UPDJUMP) {
+    # Number of iterations for jump sds:
+    niterJump <- 10000
+    
+    # Run jump SD sequence:
+    outJump <- .RunMCMC(sim = 1, dataObj = dataObj, parObj = parObj, 
+                        niter = niterJump, algObj = algObj, FertFun = FertFun,
+                        FertFun.numeric = FertFun.numeric, 
+                        FertFun.matrix = FertFun.matrix,
+                        jumpSD = NULL, UPDJUMP = TRUE)
+    
+    # Extract jump SD vector:
+    jumpSD <- outJump$jumps
+  } else {
+    if (is.null(jumpSD) | length(jumpSD) != parObj$pSamp) {
+      stop(sprintf("Length of 'jumpSD' argument should be %s.\n", 
+                   parObj$pSamp))
+      
+    }
+  }
+  
+  # Variables to be loaded to the CPUS:
+  # cpuVars <- c(".rtnorm", ".dtnorm", ".qtnorm", ".CalcLikeFert", 
+  #              ".CalcLikeFert.baftaAggr", ".CalcLikeFert.baftaIndSimp",
+  #              ".CalcLikeFert.baftaIndExt", ".CalcPostTheta", 
+  #              ".CalcPostRandEffU", ".CalcPostRandEffV", ".CalcMHratio", 
+  #              ".SampleUSig", ".SampleVSig", "FertFun", 
+  #              "FertFun.numeric", "FertFun.matrix")
+
+  # Start parallel computing:
+  sfInit(parallel = TRUE, cpus = ncpus)
+  
+  # Load BaFTA to CPUS:
+  sfLibrary("BaFTA", character.only = TRUE,
+            warn.conflicts = FALSE)
+  # sfLibrary(BaFTA)
+  
+  # Load variables to CPUS:
+  # sfExport(list = cpuVars)
+  
+  # Run MCMC in parallel:
+  outMCMC <- sfClusterApplyLB(1:nsim, .RunMCMC, dataObj = dataObj, 
+                              parObj = parObj, niter = niter, algObj = algObj,
+                              FertFun = FertFun,
+                              FertFun.numeric = FertFun.numeric, 
+                              FertFun.matrix = FertFun.matrix,
+                              jumpSD = jumpSD, UPDJUMP = FALSE)
+  
+  # Stop cluster:
+  sfStop()
+  
+  # Extract variables for coefficients and DIC:
+  for (ic in 1:nsim) {
+    if (ic == 1) {
+      thetaMat <- outMCMC[[ic]]$theta[keep, ]
+      likeMat <- outMCMC[[ic]]$likePost[keep, ]
+      if (RANDEFFU) {
+        uSdVec <- outMCMC[[ic]]$uSd[keep]
+        uMat <- outMCMC[[ic]]$u[keep, ]
+      } else {
+        uMat <- NA
+      }
+      if (RANDEFFV) {
+        vSdVec <- outMCMC[[ic]]$vSd[keep]
+        vMat <- outMCMC[[ic]]$v[keep, ]
+      } else {
+        vMat <- NA
+      }
+      
+    } else {
+      thetaMat <- rbind(thetaMat, outMCMC[[ic]]$theta[keep, ])
+      likeMat <- rbind(likeMat, outMCMC[[ic]]$likePost[keep, ])
+      if (RANDEFFU) {
+        uSdVec <- c(uSdVec, outMCMC[[ic]]$uSd[keep])
+        uMat <- rbind(uMat, outMCMC[[ic]]$u[keep, ])
+      } 
+      if (RANDEFFV) {
+        vSdVec <- c(vSdVec, outMCMC[[ic]]$vSd[keep])
+        vMat <- rbind(vMat, outMCMC[[ic]]$v[keep, ])
+      } 
+    }
+  }
+  
+  # Calculate convergence statistics:
+  Conv <- .CalcPSRF(object = outMCMC, keep = keep, nsim = ncpus)
+  
+  # Extract average parameters:
+  coeffs <- cbind(Mean = apply(thetaMat[, parObj$idSamp],  2, mean), 
+                  SD = apply(thetaMat[, parObj$idSamp], 2, sd),
+                  Lower = apply(thetaMat[, parObj$idSamp], 2, quantile, 0.025),
+                  Upper = apply(thetaMat[, parObj$idSamp], 2, quantile, 0.975),
+                  Rhat = Conv[parObj$idSamp, "Rhat"])
+  
+  if (RANDEFFU) {
+    # Include random effect standard error:
+    coeffs <- rbind(coeffs, uSd = c(Mean = mean(uSdVec), SD = sd(uSdVec),
+                                    Lower = quantile(uSdVec, 0.025),
+                                    Upper = quantile(uSdVec, 0.975),
+                                    Rhat = 1))
+    # Merge thetaMat with uSd:
+    # thetaMat <- cbind(thetaMat, uSD = uSdVec)
+    
+    # Random effect quantile:
+    uQuant <- cbind(Mean = apply(uMat, 1, mean, na.rm = TRUE), 
+                    Lower = apply(uMat, 1, quantile, 0.025, na.rm = TRUE),
+                    Upper = apply(uMat, 1, quantile, 0.975, na.rm = TRUE))
+  } else {
+    uSdVec <- NA
+    uQuant <- NA
+  }
+  
+  if (RANDEFFV) {
+    # Include random effect standard error:
+    coeffs <- rbind(coeffs, vSd = c(Mean = mean(vSdVec), SD = sd(vSdVec),
+                                    Lower = quantile(vSdVec, 0.025),
+                                    Upper = quantile(vSdVec, 0.975),
+                                    Rhat = 1))
+    # Merge thetaMat with uSd:
+    # thetaMat <- cbind(thetaMat, uSD = uSdVec)
+    
+    # Random effect quantile:
+    vQuant <- cbind(Mean = apply(vMat, 1, mean, na.rm = TRUE), 
+                    Lower = apply(vMat, 1, quantile, 0.025, na.rm = TRUE),
+                    Upper = apply(vMat, 1, quantile, 0.975, na.rm = TRUE))
+  } else {
+    vSdVec <- NA
+    vQuant <- NA
+  }
+  
+  # Calculate DIC:
+  DIC <- .CalcDIC(likelihood = likeMat[, "Likelihood"], 
+                  k = length(parObj$idSamp))
+  
+  # Y predicted:
+  yPred <- .CalcYpred(dataObj = dataObj, thetaMat = thetaMat, uMat = uMat,
+                      FertFun = FertFun, FertFun.numeric = FertFun.numeric)
+  
+  # Calculate predictive loss:
+  PredLoss <- .CalcPredLoss(dataObj = dataObj, yPred = yPred)
+  
+  # Extract aggregated fertility and number of offspring:
+  
+  if (algObj$dataType == "aggregated") {
+    aggrData <- object[which(object$Age >= dataObj$alpha), ]
+  } else {
+    xag <- dataObj$alpha:ceiling(max(object$Age))
+    nxag <- length(xag)
+    indID <- unique(object$indID)
+    indObs <- t(sapply(indID, function(iid) {
+      idi <- which(object$indID == iid)
+      agei <- range(floor(object$Age[idi]))
+      return(agei)
+    }))
+    
+    tempag <- t(sapply(1:(nxag - 1), function(ix) {
+      idi <- which(indObs[, 2] >= xag[ix] & indObs[, 1] < xag[ix + 1])
+      idb <- which(object$Age >= xag[ix] & object$Age < xag[ix + 1])
+      nPariAll <- length(idi)
+      nPariAvail <- length(idb)
+      nOffs <- sum(object$nOffspring[idb])
+      return(c(nParents = nPariAvail, nOffspring = nOffs, 
+               nParentsAll = nPariAll))
+    }))
+    aggrData <- data.frame(Age = xag[-nxag], tempag, 
+                           Fertility = tempag[, 2] / tempag[, 1],
+                           RealizedFert = tempag[, 2] / tempag[, 3])
+  }
+  
+  # Calculate mean fertility and 95% credible intervals:
+  xv <- seq(dataObj$alpha, ceiling(max(dataObj$data$Age)), 0.1) - 
+    dataObj$alpha
+  
+  # Calculate estimated fertility from parameter posteriors:
+  fertAll <- apply(thetaMat, 1, function(be) {
+    fert <- FertFun(be, xv)
+    return(fert)
+  })
+  
+  # Calculate mean and quantiles:
+  fertQuant <- cbind(Mean = apply(fertAll, 1, mean, na.rm = TRUE), 
+                     Lower = apply(fertAll, 1, quantile, 0.025, na.rm = TRUE),
+                     Upper = apply(fertAll, 1, quantile, 0.975, na.rm = TRUE))
+  
+  # Calculate predictive quantiles:
+  if (algObj$dataType == "aggregated") {
+    predQuant <- cbind(Mean = apply(yPred, 2, mean, na.rm = TRUE), 
+                       Lower = apply(yPred, 2, quantile, 0.025, na.rm = TRUE),
+                       Upper = apply(yPred, 2, quantile, 0.975, na.rm = TRUE))
+    
+  } else {
+    xag <- dataObj$alpha:ceiling(max(object$Age))
+    nxag <- length(xag)
+    yPredAgg <- sapply(1:(nxag - 1), function(ix) {
+      idb <- which(object$Age >= xag[ix] & object$Age < xag[ix + 1])
+      if (length(idb) > 1) {
+        nOffs <- apply(yPred[, idb], 1, sum)
+      } else if (length(idb) == 1) {
+        nOffs <- yPred[, idb]
+      } else {
+        nOffs <- rep(0, nrow(yPred))
+      }
+      return(nOffs)
+    })
+    predQuant <- cbind(Mean = apply(yPredAgg, 2, mean, na.rm = TRUE), 
+                       Lower = apply(yPredAgg, 2, quantile, 0.025, 
+                                     na.rm = TRUE),
+                       Upper = apply(yPredAgg, 2, quantile, 0.975, 
+                                     na.rm = TRUE))
+  }
+  
+  # end timer:
+  End <- Sys.time()
+  compTime <- sprintf("%s mins", signif(as.numeric(End - Start, 
+                                                   units = "mins"), 2))
+  
+  # Settings:
+  settings <- list(model = model, dataType = dataType, niter = niter, 
+                   burnin = burnin, thinning = thinning, nsim = nsim, 
+                   ncpus = ncpus, compTime = compTime)
+  
+  # store output:
+  fullOut <- list(coefficients = coeffs, x = xv, fert = fertQuant, 
+                  theta = thetaMat, uSd = uSdVec, vSd = vSdVec, 
+                  likePost = likeMat, DIC = DIC, PredLoss = PredLoss, 
+                  pred = predQuant, aggrData = aggrData,
+                  runs = outMCMC, data = dataObj, settings = settings,
+                  keep = keep, params = parObj)
+  
+  class(fullOut) <- "bafta"
+  return(fullOut)
 }
 
-# A.3) plotting bafta outputs:
-# ---------------------------- #
-plot.bafta <- function(x, plot.type = "traces", minAge = 0) {
-  op <- par(no.readonly = TRUE)
-  if (plot.type == "traces") {
-    np <- x$settings['np']
-    randEffs <- x$settings["randEffs"]
-    ns <- ifelse(randEffs == 1, 1, 0)
-    parmatfull <- x$parmatfull
-    parmat <- x$parmat
-    parnames <- expression(a[0], a[1], a[2], a[3], a[4], a[5])[1:np]
-    parnames <- c(parnames, expression(sigma))
-    niter <- x$settings["niter"]
-    # Visualize results:
-    par(mfrow = c(np + ns, 2)) 
-    for (pp in 1:(np + ns)) {
-      xlim <- c(1, niter)
-      ylim <- range(parmatfull[, pp])
-      plot(xlim, ylim, col = NA, main = parnames[pp], xlab = "", ylab = "")
-      for (al in 1:nsim) {
-        idtr <- 1:niter + niter * (al - 1)
-        lines(parmatfull[idtr, pp], col = al)
-      }
-      abline(h = x$coeff[pp, 1], col = 2)
-      
-      plot(density(parmat[, pp]), main = parnames[pp], xlab = "", ylab = "")
-      abline(v = x$coeff[pp, 1], col = 2)
+# Print BaFTA:
+print.bafta <- function(x, ...) {
+  extraArgs <- list(...)
+  if (length(extraArgs) > 0) {
+    if (!is.element('digits', names(extraArgs))){
+      digits <- 4
+    } else {
+      digits <- extraArgs$digits
     }
   } else {
-    # Extract fecundity model:
-    fecmod <- x$settings["model"]
-    fec <- fecMods[[sprintf("mod%s", fecmod)]]$fun
-    np <- fecMods[[sprintf("mod%s", fecmod)]]$np
-    yave <- x$avefec
-    xd <- 1:length(yave) - 1 + minAge
-    fecCI <- x$fecICs
-    par(mfrow = c(1, 1))
-    ylim <- c(0, max(yave, fecCI))
-    par(mfrow = c(1, 1))
-    plot(range(xd), ylim, col = NA, xlab = "Age", ylab = "Ave. fec.")
-    polygon(x = c(xd, rev(xd)), c(fecCI[, 2], rev(fecCI[, 3])), 
-            col = adjustcolor("dark green", alpha.f = 0.25), border = NA)
-    lines(xd, yave, col = 'dark red', lwd = 4)
-    lines(xd, fecCI[, 1], col = 'dark green', lwd = 2)
-    
+    digits <- 4
   }
+  # Call:
+  cat("\nCall:\n")
+  cat(paste("Model          \t: ", x$settings$model, "\n", sep = ""))
+  cat(paste("Data type      \t: ", x$settings$dataType, "\n", sep = ""))
+  cat(paste("Num. iterations\t: ", x$settings$niter, "\n", sep = ""))
+  cat(paste("Burnin         \t: ", x$settings$burnin, "\n", sep = ""))
+  cat(paste("Thinning       \t: ", x$settings$thinning, "\n", sep = ""))
+  cat(paste("Number of sims.\t: ", x$settings$nsim, "\n", sep = ""))
+  cat(paste("Computing time \t: ", x$settings$compTime, "\n", sep = ""))
+  
+  # Coefficients:
+  cat("\nCoefficients:\n")
+  print.default(x$coefficients, digits, ...)
+  
+  # Convergence:
+  cat("\nConvergence:\n")
+  if (all(!is.na(x$coefficients[, "Rhat"])) & 
+      all(x$coefficients[, "Rhat"] < 1.05)) {
+    convMessage <- "All parameter chains converged.\n"
+  } else {
+    convMessage <- "Some parameter chains did not converge.\n"
+  }
+  cat(convMessage)
+  
+  # DIC:
+  cat("\nModel fit:\n")
+  if (is.na(x$DIC[1])){
+    cat("\nDIC not calculated.")
+  } else {
+    cat(sprintf("\nDIC = %s\n", round(x$DIC["DIC"], 2)))
+  }
+  
+  # Predictive loss:
+  cat("\nPredictive loss:\n")
+  print.default(x$PredLoss, digits = 3)
+  
 }
 
-# A.4) Printing bafta outputs:
-# ---------------------------- #
-print.bafta <- function(x, ...) {
-  cat("Settings:\n")
-  print(x$settings)
+# Summary BaFTA:
+summary.bafta <- function(object, ...) {
+  extraArgs <- list(...)
+  if (length(extraArgs) > 0) {
+    if (!is.element('digits', names(extraArgs))){
+      digits <- 4
+    } else {
+      digits <- extraArgs$digits
+    }
+  } else {
+    digits <- 4
+  }
+  # Call:
+  cat("\nCall:\n")
+  cat(paste("Model          \t: ", object$settings$model, "\n", sep = ""))
+  cat(paste("Data type      \t: ", object$settings$dataType, "\n", sep = ""))
+  cat(paste("Num. iterations\t: ", object$settings$niter, "\n", sep = ""))
+  cat(paste("Burnin         \t: ", object$settings$burnin, "\n", sep = ""))
+  cat(paste("Thinning       \t: ", object$settings$thinning, "\n", sep = ""))
+  cat(paste("Number of sims.\t: ", object$settings$nsim, "\n", sep = ""))
+  cat(paste("Computing time \t: ", object$settings$compTime, "\n", sep = ""))
   
-  cat("Coefficients:\n")
-  print(x$coefficients, ...)
+  # Coefficients:
+  cat("\nCoefficients:\n")
+  print.default(object$coefficients, digits, ...)
   
-  cat("\nDIC:\n")
-  print(x$modSel)
+  # Convergence:
+  cat("\nConvergence:\n")
+  if (all(!is.na(object$coefficients[, "Rhat"])) & 
+      all(object$coefficients[, "Rhat"] < 1.05)) {
+    convMessage <- "All parameter chains converged.\n"
+  } else {
+    convMessage <- "Some parameter chains did not converge.\n"
+  }
+  cat(convMessage)
+  
+  # DIC:
+  cat("\nModel fit:\n")
+  if (is.na(object$DIC[1])){
+    cat("\nDIC not calculated.")
+  } else {
+    cat(sprintf("\nDIC = %s\n", round(object$DIC["DIC"], 2)))
+  }
+  
+  # Predictive loss:
+  cat("\nPredictive loss:\n")
+  print.default(object$PredLoss, digits = 3)
+  
+}
+
+# Plotting function:
+plot.bafta <- function(x, type = "traces", ...) {
+  argList <- list(...)
+  plTypes <- c("traces", "density", "fertility", "predictive")
+  if (!type %in% plTypes) {
+    stop(sprintf("%s.\n%s %s.\n", "Wrong type of plot for object of class 'bafta'", 
+                 "Available types are", 
+                 paste(paste("'", plTypes, "'", sep = ""), collapse = ", ")))
+  }
+  if (type == "traces") {
+    idkeep <- seq(1, x$settings$niter, x$settings$thinning)
+    pSamp <- x$params$pSamp
+    idSamp <- x$params$idSamp
+    pName <- x$params$thetaName[idSamp]
+    nsim <- x$settings$nsim
+    ylim <- sapply(1:pSamp, function(ipar) {
+      range(sapply(1:nsim, function(isim) {
+        range(x$runs[[isim]]$theta[, ipar], na.rm = TRUE)
+      }), na.rm = TRUE)
+    })
+    if (grepl("indiv", x$settings$dataType)) {
+      uyl <- range(sapply(1:nsim, function(isim) {
+        range(x$runs[[isim]]$uSd)
+      }))
+      ylim <- cbind(ylim, uyl)
+      pPars <- pSamp + 1
+      pName <- c(pName, "uSd")
+      if (x$settings$dataType == "indivExtended") {
+        vyl <- range(sapply(1:nsim, function(isim) {
+          range(x$runs[[isim]]$vSd)
+        }))
+        ylim <- cbind(ylim, vyl)
+        pPars <- pPars + 1
+        pName <- c(pName, "vSd")
+      }
+    } else {
+      pPars <- pSamp
+    }
+    if ("ylim" %in% names(argList)) {
+      ylim <- argList$ylim
+    }
+    
+    colnames(ylim) <- pName
+    par(mfrow = c(ceiling(pPars / 2), 2), mar = c(4, 4, 3, 1))
+    for (ipar in idSamp) {
+      plot(idkeep, x$runs[[1]]$theta[idkeep, ipar], type = 'l', 
+           ylim = ylim[, ipar], main = pName[ipar], xlab = "Iteration", 
+           ylab = "Parameter")
+      for (ic in 2:nsim) {
+        lines(idkeep, x$runs[[ic]]$theta[idkeep, ipar], col = ic)
+      }
+    }
+    if (grepl("indiv", x$settings$dataType)) {
+      plot(idkeep, x$runs[[1]]$uSd[idkeep], type = 'l',
+           ylim = ylim[, ncol(ylim)], xlab = "Iteration", ylab = "Parameter",
+           main = "uSd")
+      for (ic in 2:nsim) {
+        lines(idkeep, x$runs[[ic]]$uSd[idkeep], col = ic)
+      }
+      if (x$settings$dataType == "indivExtended") {
+        plot(idkeep, x$runs[[1]]$vSd[idkeep], type = 'l',
+             ylim = ylim[, ncol(ylim)], xlab = "Iteration", ylab = "Parameter",
+             main = "vSd")
+        for (ic in 2:nsim) {
+          lines(idkeep, x$runs[[ic]]$vSd[idkeep], col = ic)
+        }
+        
+      }
+    }
+    
+  } else if (type == "density") {
+    pSamp <- x$params$pSamp
+    idSamp <- x$params$idSamp
+    pName <- x$params$thetaName[idSamp]
+    parMat <- x$theta[, idSamp]
+    if (grepl("indiv", x$settings$dataType)) {
+      parMat <- cbind(parMat, uSD = x$uSd)
+      idSamp <- c(idSamp, max(idSamp) + 1)
+      pSamp <- length(idSamp)
+      pName <- c(pName, "uSd")
+      if (x$settings$dataType == "indivExtended") {
+        parMat <- cbind(parMat, vSD = x$vSd)
+        idSamp <- c(idSamp, max(idSamp) + 1)
+        pSamp <- length(idSamp)
+        pName <- c(pName, "vSd")
+      }
+    }
+    
+    nsim <- x$settings$nsim
+    pDens <- lapply(1:pSamp, function(ipar) {
+      density(parMat[, ipar])
+    })
+    names(pDens) <- pName
+    ylim <- sapply(1:pSamp, function(ipar) {
+      c(0, max(pDens[[ipar]]$y))
+    })
+    if ("ylim" %in% names(argList)) {
+      ylim <- argList$ylim
+    }
+    xlim <- sapply(1:pSamp, function(ipar) {
+      range(pDens[[ipar]]$x)
+    })
+    if ("xlim" %in% names(argList)) {
+      xlim <- argList$xlim
+    }
+    
+    colnames(xlim) <- colnames(ylim) <- pName
+    
+    pCis <- lapply(pName, function(ipar) {
+      which(pDens[[ipar]]$x >= x$coefficients[ipar, "Lower"] &
+              pDens[[ipar]]$x <= x$coefficients[ipar, "Upper"])
+    })
+    par(mfrow = c(ceiling(pSamp / 2), 2), mar = c(4, 4, 3, 1))
+    for (ipar in idSamp) {
+      plot(xlim[, ipar], ylim[, ipar], col = NA, xlab = "Iteration", 
+           ylab = "Posterior", main = pName[ipar])
+      xx <- pDens[[ipar]]$x
+      yy <- pDens[[ipar]]$y
+      idcis <- pCis[[ipar]]
+      ncis <- length(idcis)
+      polygon(c(xx[idcis], rev(xx[idcis])), c(yy[idcis], rep(0, ncis)), 
+              col = "orange", border = NA)
+      lines(xx, yy, lwd = 2, col = 'dark red')
+      
+    }
+  } else if (type == "fertility") {
+    if ("showRealized" %in% names(argList)) {
+      REALIZED <- TRUE
+    } else {
+      REALIZED <- FALSE
+    }
+    dat <- x$aggrData
+    fertQuant <- x$fert
+    idplf <- 1:min(apply(fertQuant, 2, function(ff) max(which(!is.na(ff)))))
+    fertQuant <- fertQuant[idplf, ]
+    xv <- x$x[idplf]
+    alpha <- x$data$alpha
+    ylim <- c(0, max(c(dat$Fertility, fertQuant[, "Upper"]), 
+                     na.rm = TRUE))
+    if ("ylim" %in% names(argList)) {
+      ylim <- argList$ylim
+    }
+    xlim <- c(0, max(dat$Age) + alpha)
+    # Offset for models with support x > 0:
+    if (x$settings$model %in% c("gamma", "beta", "gammaMixture", "Hadwiger", 
+                            "HadwigerMixture")) {
+      xoffs <- 0.005
+    } else {
+      xoffs <- 0
+    }
+    
+    
+    par(mfrow = c(1, 1))
+    plot(xlim, ylim, col = NA, xlab = "Age", ylab = "Fertility")
+    polygon(alpha + c(xv, rev(xv)), 
+            c(fertQuant[, "Lower"], rev(fertQuant[, "Upper"])),
+            col = "orange", border = NA)
+    lines(xv + alpha, fertQuant[, "Mean"], col = 'red', lwd = 2)
+    lines(dat$Age + xoffs, dat$Fertility, type = 'b',
+          lwd = 2)
+    if ("RealizedFert" %in% colnames(dat) & REALIZED) {
+      lines(dat$Age + xoffs, dat$RealizedFert, type = 'b',
+            lwd = 2, col = 'grey80', lty = 2)
+    }
+  } else if (type == "predictive") {
+    dat <- x$aggrData
+    predQuant <- x$pred
+    alpha <- x$data$alpha
+    ylim <- c(0, max(c(dat$nOffspring, predQuant[, "Upper"]), 
+                     na.rm = TRUE))
+    if ("ylim" %in% names(argList)) {
+      ylim <- argList$ylim
+    }
+    xlim <- c(0, max(dat$Age))
+    # Offset for models with support x > 0:
+    if (x$settings$model %in% c("gamma", "beta", "gammaMixture", "Hadwiger", 
+                                "HadwigerMixture")) {
+      xoffs <- 0.005
+    } else {
+      xoffs <- 0
+    }
+    par(mfrow = c(1, 1))
+    plot(xlim, ylim, col = NA, xlab = "Age", ylab = "Number of offspring")
+    polygon(c(dat$Age, rev(dat$Age)), 
+            c(predQuant[, "Lower"], rev(predQuant[, "Upper"])),
+            col = "orange", border = NA)
+    lines(dat$Age, predQuant[, "Mean"], col = 'red', lwd = 2)
+    lines(dat$Age + xoffs, dat$nOffspring, col = 1, 
+          lwd = 2, type = 'b')
+  }
 }
 
 # =========================== #
 # B) INTERNAL FUNCTIONS: ==== 
 # =========================== #
-# B.1) Manage user inputs:
-# ------------------------ #
+# ------------------------------------- #
+# ---- Internal object management: ----
+# ------------------------------------- #
 # Algorithm object function:
-.CreateAlgObj <- function(model, dataType, formula, niter, burnin,
-                          thinning, updateJumps, nsim, minAge) {
-  return(list(model = model, dataType = dataType, formula = formula, 
-              niter = niter, burnin = burnin, thinning = thinning, 
-              updJump = updateJumps, nsim = nsim, minAge = minAge))
+.CreateAlgObj <- function(model, dataType, minAge, gestTime, formula, niter, 
+                          burnin, nsim, thinning, UPDJUMP, jumpSD) {
+  return(list(model = model, dataType = dataType, minAge = minAge, 
+              gestTime = gestTime, formula = formula, niter = niter, 
+              burnin = burnin, thinning = thinning, nsim = nsim, 
+              minAge = minAge, UPDJUMP = UPDJUMP, jumpSD = jumpSD))
 }
 
 # Prepare data object:
 .CreateDataObj <- function(object, algObj) {
   n <- nrow(object)
-  
-}
+  # Aggretated data:
+  if (algObj$dataType == "aggregated") {
+    # Extract ages:
+    idages <- which(object$Fertility > 0)
+    alpha <- object$Age[which(object$Fertility > 0)[1]]
+    idages <- which(object$Age >= alpha)
+    x <- object$Age[idages] - alpha
+    
+    # Adjust first age > 0 for certain models:
+    if (algObj$model %in% c("gamma", "beta", "gammaMixture", "Hadwiger", 
+                     "HadwigerMixture")) {
+      x[which(x == 0)] <- 0.005
+    }
 
-
-# Prepare data object:
-.CreateDataObj <- function(object, algObj) {
-  classDataObj <- c("bastacmr", "ageUpd")
-  # Data Object for CMR data type:
-  if (algObj$dataType == "CMR") {
-    dataObj <- list()
-    # Extract study year sequence and length:
-    dataObj$study <- algObj$start:algObj$end
-    dataObj$studyLen <- length(dataObj$study)
-    
-    # Number of observations:
-    dataObj$n <- nrow(object)
-    
-    # Recapture matrix:
-    Y <- as.matrix(object[, 1:dataObj$studyLen + 3])
-    dataObj$Y <- Y
-    dataObj$Y[Y > 1] <- 1
-    colnames(dataObj$Y) <- dataObj$study
-    
-    # NOTE: addition of censTime for studies where individuals are censored
-    #       before the end of the study (e.g. two studies of different 
-    #       duration).
-    # Find possible times of censoring before the study end:
-    censTime <- rep(algObj$end, dataObj$n)
-    for (tt in 1:dataObj$studyLen) {
-      idCens <- which(Y[, tt] > 1)
-      censTime[idCens] <- dataObj$study[tt]
-    }
-    dataObj$censTime <- censTime
-    
-    # Birth - death matrix:
-    bd <- as.matrix(object[, 2:3])
-    dataObj$bi <- bd[, 1]
-    dataObj$di <- bd[, 2]
-    bi0 <- which(dataObj$bi == 0 | is.na(dataObj$bi))
-    if (length(bi0) > 0) {
-      dataObj$idNoB <- bi0
-      dataObj$updB <- TRUE
-      dataObj$nUpdB <- length(bi0)
-    } else {
-      dataObj$updB <- FALSE
-      dataObj$nUpdB <- 0
-    }
-    di0 <- which(dataObj$di == 0 | is.na(dataObj$di))
-    if (length(di0) > 0) {
-      dataObj$idNoD <- di0
-      dataObj$updD <- TRUE
-      dataObj$nUpdD <- length(di0)
-    } else {
-      dataObj$updD <- FALSE
-      dataObj$nUpdD <- 0
-    }
-    
-    if (!dataObj$updB & !dataObj$updD) {
-      classDataObj[2] <- "noAgeUpd"
-      dataObj$updA <- FALSE
-    } else {
-      dataObj$idNoA <- sort(unique(c(dataObj$idNoB, dataObj$idNoD)))
-      dataObj$nUpdA <- length(dataObj$idNoA)
-      dataObj$updA <- TRUE
-      
-      # NOTE: addition of min-max birth and death (2022-05-17):
-      if ("Min.Birth" %in% colnames(object)) {
-        dataObj$minBirth <- object[, "Min.Birth"]
-        idMinB <- which(!is.na(dataObj$minBirth[dataObj$idNoB]))
-        if (length(idMinB) > 0) {
-          dataObj$idMinB <- dataObj$idNoB[idMinB]
-          dataObj$updMinB <- TRUE
-        } else {
-          dataObj$idMinB <- NA
-          dataObj$updMinB <- FALSE
-        }
-      } else {
-        dataObj$minBirth <- rep(NA, dataObj$n)
-        dataObj$idMinB <- NA
-        dataObj$updMinB <- FALSE
-      }
-      if ("Max.Birth" %in% colnames(object)) {
-        dataObj$maxBirth <- object[, "Max.Birth"]
-        idMaxB <- which(!is.na(dataObj$maxBirth[dataObj$idNoB]))
-        if (length(idMaxB) > 0) {
-          dataObj$idMaxB <- dataObj$idNoB[idMaxB]
-          dataObj$updMaxB <- TRUE
-        } else {
-          dataObj$idMaxB <- NA
-          dataObj$updMaxB <- FALSE
-        }
-      } else {
-        dataObj$maxBirth <- rep(NA, dataObj$n)
-        dataObj$idMaxB <- NA
-        dataObj$updMaxB <- FALSE
-      }
-      if ("Min.Death" %in% colnames(object)) {
-        dataObj$minDeath <- object[, "Min.Death"]
-        idMinD <- which(!is.na(dataObj$maxDeath[dataObj$idNoD]))
-        if (length(idMinD) > 0) {
-          dataObj$idMinD <- dataObj$idNoD[idMinD]
-          dataObj$updMinD <- TRUE
-        } else {
-          dataObj$idMinD <- NA
-          dataObj$updMinD <- FALSE
-        }
-      } else {
-        dataObj$minDeath <- rep(NA, dataObj$n)
-        dataObj$idMinD <- NA
-        dataObj$updMinD <- FALSE
-      }
-      if ("Max.Death" %in% colnames(object)) {
-        dataObj$maxDeath <- object[, "Max.Death"]
-        idMaxD <- which(!is.na(dataObj$maxDeath[dataObj$idNoD]))
-        if (length(idMaxD) > 0) {
-          dataObj$idMaxD <- dataObj$idNoD[idMaxD]
-          dataObj$updMaxD <- TRUE
-        } else {
-          dataObj$idMaxD <- NA
-          dataObj$updMaxD <- FALSE
-        }
-        
-      } else {
-        dataObj$maxDeath <- rep(NA, dataObj$n)
-        dataObj$idMaxD <- NA
-        dataObj$updMaxD <- FALSE
-      }
-      
-      # 4.1.2 Calculate first and last time observed 
-      #       and total number of times observed:
-      ytemp <- t(t(dataObj$Y) * dataObj$study)
-      dataObj$lastObs <- c(apply(ytemp, 1, max))
-      ytemp[ytemp == 0] <- 10000
-      dataObj$firstObs <- c(apply(ytemp, 1, min))
-      dataObj$firstObs[dataObj$firstObs == 10000] <- 0
-      dataObj$oi <- dataObj$Y %*% rep(1, dataObj$studyLen)
-      
-      # 4.1.3 Define study duration:
-      dataObj$Tm <- matrix(dataObj$study, dataObj$n, 
-                           dataObj$studyLen, byrow = TRUE)
-      fii <- dataObj$firstObs
-      id1 <- which(dataObj$bi > 0 & dataObj$bi >= algObj$start)
-      fii[id1] <- dataObj$bi[id1] + 1
-      fii[dataObj$bi > 0 & dataObj$bi < algObj$start]  <- algObj$start
-      lii <- dataObj$lastObs
-      id2 <- which(dataObj$di > 0 & dataObj$di <= dataObj$censTime)
-      lii[id2] <- dataObj$di[id2] - 1
-      idCens <- which(dataObj$di > 0 & dataObj$di > dataObj$censTime)
-      lii[idCens] <- dataObj$censTime[idCens]
-      dataObj$obsMat <- .BuildAliveMatrix(fii, lii, dataObj)
-      dataObj$obsMat[lii == 0 | fii == 0, ] <- 0
-      classDataObj[2] <- "ageUpd"
-    }
-    dataObj$Dx <- 1 
-    classDataObj[1] <- "bastacmr"
-  }
-  
-  # Data Object for Census data type:
-  else {
-    n <- nrow(object)
-    # Calculate Julian times:
-    bi <- round(as.numeric(as.Date(object$Birth.Date, 
-                                   format = "%Y-%m-%d")) / 
-                  365.25, 2) + 1970
-    bil <- round(as.numeric(as.Date(object$Min.Birth.Date, 
-                                    format = "%Y-%m-%d")) /
-                   365.25, 2) + 1970
-    biu <- round(as.numeric(as.Date(object$Max.Birth.Date, 
-                                    format = "%Y-%m-%d")) /
-                   365.25, 2) + 1970
-    firstObs <- round(as.numeric(as.Date(object$Entry.Date, 
-                                         format = "%Y-%m-%d")) /
-                        365.25, 2) + 1970
-    lastObs <- round(as.numeric(as.Date(object$Depart.Date, 
-                                        format = "%Y-%m-%d")) /
-                       365.25, 2) + 1970
-    
-    # Entry and departure types:
-    entryType <- as.character(object$Entry.Type)
-    departType <- as.character(object$Depart.Type)
-    
-    # Censored individuals:
-    idCens <- which(departType %in% c("O", "C"))
-    nCens <- length(idCens)
-    
-    # Birth times to be estimated:
-    idNoBirth <- which(bi != bil | bi != biu)
-    nNoBirth <- length(idNoBirth)
-    if (nNoBirth == 0) {
-      updB <- FALSE
-      classDataObj[2] <- "noAgeUpd"
-    } else {
-      updB <- TRUE
-      classDataObj[2] <- "ageUpd"
-    }
-    
     # Create data object:
-    dataObj <- list(bi = bi, bil = bil, biu = biu, firstObs = firstObs, 
-                    lastObs = lastObs, idCens = idCens,
-                    idNoB = idNoBirth, nUpdB = nNoBirth, updB = updB, 
-                    updD = FALSE, idNoD = NA, nUpdD = 0,
-                    idNoA = idNoBirth, nUpdA = nNoBirth, updA = updB, n = n, 
-                    nCens = nCens, studyLen = NA)
-    classDataObj[1] <- "bastacensus"
-  }
-  class(dataObj) <- classDataObj
-  
-  # Output:
-  return(dataObj)
-}
-
-# Create initial age object:
-.CreateAgeObj <- function(dataObj, algObj) {
-  ageObj <- list()
-  bi <- dataObj$bi
-  if (dataObj$updB & inherits(dataObj, "bastacmr")) {
-    bi[dataObj$idNoB] <- dataObj$firstObs[dataObj$idNoB] - 
-      sample(6:1, size = dataObj$nUpdB, replace = TRUE)
-  }
-  if (inherits(dataObj, "bastacmr")) {
-    di <- dataObj$di
-    if (dataObj$updD) {
-      di[dataObj$idNoD] <- apply(cbind(bi[dataObj$idNoD], 
-                                       dataObj$lastObs[dataObj$idNoD]),
-                                 1, max) + 
-        sample(6:1, size = dataObj$nUpdD, replace = TRUE)
+    do <- list(data = object, idages = idages, alpha = alpha, x = x,
+               xMax = max(x), n = n)
+    class(do) <- "baftaAggr"
+  } else if (algObj$dataType == "indivSimple") {
+    if (is.na(algObj$minAge)) {
+      alpha <- min(object$Age)
+    } else {
+      alpha <- algObj$minAge
     }
-    age <- di - bi
-    ageTr <- algObj$start - bi
-    ageTr[ageTr < 0] <- 0
-  } else {
-    di <- dataObj$lastObs
-    age <- dataObj$lastObs - bi
-    ageTr <- dataObj$firstObs - bi
-    ageTr[ageTr < 0] <- 0
+    x <- object$Age - alpha
+    # Adjust first age > 0 for certain models:
+    if (algObj$model %in% c("gamma", "beta", "gammaMixture", "Hadwiger", 
+                            "HadwigerMixture")) {
+      x[which(x == 0)] <- 0.005
+    }
+    if (any(x < 0)) {
+      warning("Some ages occur before minAge.", 
+              "These records have been excluded from the analysis.\n", 
+              call. = FALSE)
+      idincl <- which(x >= alpha)
+      object <- object[idincl, ]
+      x <- x[idincl]
+    }
+    y <- object$nOffspring
+    rMat <- model.matrix(~ indID - 1, data = object)
+    ni <- ncol(rMat)
+    do <- list(data = object, x = x, y = y, rMat = rMat, ni = ni, 
+               xMax = max(x), n = n, alpha = alpha)
+    class(do) <- "baftaIndSimp"
+  } else if (algObj$dataType == "indivExtended") {
+    if (is.na(algObj$minAge)) {
+      alpha <- floor(min(object$Age))
+    } else {
+      alpha <- algObj$minAge
+    }
+    if (is.na(algObj$gestTime)) {
+      tau <- floor(min(object$IBI[which(object$First == 0)]))
+    } else {
+      tau <- algObj$gestTime
+      if (any(object$IBI[which(object$First == 0)] < tau)) {
+        warning("Specified gestation time is longer than the minimum IBI.\nGestation time was adjusted to min(IBI).")
+        tau <- floor(min(object$IBI[which(object$First == 0)]))
+      }
+    }
+    x <- object$Age - alpha
+    # Adjust first age > 0 for certain models:
+    if (algObj$model %in% c("gamma", "beta", "gammaMixture", "Hadwiger", 
+                            "HadwigerMixture")) {
+      x[which(x == 0)] <- 0.005
+    }
+    if (any(x < 0)) {
+      warning("Some ages occur before minAge.", 
+              "These records have been excluded from the analysis.\n", 
+              call. = FALSE)
+      idincl <- which(x >= alpha)
+      object <- object[idincl, ]
+      x <- x[idincl]
+    }
+    y <- object$nOffspring
+    rMat <- model.matrix(~ indID - 1, data = object)
+    ni <- ncol(rMat)
+    z <- object$IBI
+    nIBI <- c(rep(1, n) %*% (rMat * (1 - object$First)))
+    idv <- which(nIBI > 0)
+    idIBI <- rep(0, ni)
+    idIBI[idv] <- 1
+    niv <- sum(idIBI)
+    z[which(object$First == 0)] <- z[which(object$First == 0)] - tau
+    w <- object$Age - alpha
+    do <- list(data = object, x = x, y = y, rMat = rMat, ni = ni, 
+               xMax = max(x), z = z, w = w, n = n, alpha = alpha, tau = tau,
+               indv = idIBI, idv = idv, niv = niv)
+    class(do) <- "baftaIndExt"
   }
-  
-  # indicator for uncensored:
-  indUncens <- rep(1, dataObj$n)
-  if (inherits(dataObj, "bastacensus")) {
-    indUncens <- rep(1, dataObj$n)
-    indUncens[dataObj$idCens] <- 0
-  }
-  
-  # Recalculate ages based on minAge:
-  # ---------------------------------
-  if (algObj$minAge > 0) {
-    # Ages and indicator after min age:
-    ageAftMa <- age - algObj$minAge
-    ageAftMa[ageAftMa < 0] <- 0
-    
-    # Ages and indicator before min age:
-    ageBefMa <- age
-    indBefMa <- rep(0, dataObj$n)
-    indBefMa[ageBefMa < algObj$minAge] <- 1
-    ageBefMa[age >= algObj$minAge] <- algObj$minAge
-    
-    # Ages at truncation and indicator after min age:
-    ageTrAftMa <- ageTr - algObj$minAge
-    ageTrAftMa[ageTrAftMa < 0] <- 0
-    
-    # Ages at truncation and indicator before min age:
-    ageTrBefMa <- ageTr
-    ageTrBefMa[ageTr >= algObj$minAge] <- algObj$minAge
-  } else {
-    ageBefMa <- ageTrBefMa <- indBefMa <- rep(0, dataObj$n)
-    ageAftMa <- age
-    ageTrAftMa <- ageTr
-  }
-  
-  
-  # Create alive matrix for bastacmr:
-  # ---------------------------------
-  if (inherits(dataObj, "bastacmr")) {
-    firstObs <- c(apply(cbind(algObj$start, bi + 1), 1, max))
-    lastObs <- c(apply(cbind(algObj$end, dataObj$censTime, di), 1, min))
-    alive <- .BuildAliveMatrix(firstObs, lastObs, dataObj)
-  } else {
-    alive <- NA
-  }
-  
-  # Fill-in matrices for age object:
-  # --------------------------------
-  ageObj$ages <- data.frame(birth = bi, death = di, age = age, ageTr = ageTr,
-                            ageAft = ageAftMa, ageBef = ageBefMa, 
-                            truAft = ageTrAftMa, truBef = ageTrBefMa)
-  ageObj$inds <- data.frame(ageBef = indBefMa, uncens = indUncens)
-  ageObj$alive <- alive
-  
-  # Assign class to age object:
-  # ---------------------------
-  minAgeClass <- ifelse(algObj$minAge > 0, "minAge", "noMinAge")
-  if (inherits(dataObj, "bastacmr")) {
-    class(ageObj) <- c("agecmr", minAgeClass)
-  } else {
-    class(ageObj) <- c("agecensus", minAgeClass)
-  }
-  return(ageObj)
+  return(do)
 }
 
-
-# B.2) Create and manage covariates:
-# ---------------------------------- #
-
-
-# B.3) Fecundity parameters:
-# -------------------------- #
-# Fertility:
-.SetDefaultBeta <- function(beta, modelFert = "quadratic") {
-  if (is.null(beta)) {
-    stop("Missing 'beta' parameter vector or matrix.\n", call. = FALSE)
-  } 
-  if (modelFert == "quadratic") {
+# Fertility parameters:
+.SetDefaultBeta <- function(algObj, dataObj) {
+  model <- algObj$model
+  if (model == "quadratic") {
     nBe <- 3
-    startBet <- c(-2, 0.01, 0.001)
-    priorMean <- c(-2, 0.01, 0.001)
-    priorSd <- c(2, 0.5, 0.5)
-    lowBet <- c(0, 0, 0)
-    jumpBet <- c(1, 0.2, 0.2)
-    jitter <- c(1, 0.2, 0.2)
-  } else if (modelFert == "PeristeraKostaki") {
+    lowBe <- rep(0, 3)
+    uppBe <- rep(Inf, 3)
+    startBe <- c(1, 0.025, 10)
+    priorMeanBe <- c(1, 0.025, 10)
+    idSamp <- 1:3
+  } else if (model == "PeristeraKostaki") {
     nBe <- 4
-    startBet <- c(1, 20, 10, 20)
-    priorMean <- c(1, 10, 10, 10)
-    priorSd <- c(2, 5, 5, 5)
-    lowBet <- c(0, 0, 0, 0)
-    jumpBet <- c(1, 1, 1, 1)
-    jitter <- c(1, 5, 5, 5)
-  } else if (modelFert == "ColcheroMuller") {
+    lowBe <- c(0, 0, 0, 0)
+    uppBe <- c(rep(Inf, 3), dataObj$xMax)
+    startBe <- c(1, 5, 15, dataObj$xMax / 2)
+    priorMeanBe <- c(1, 5, 15, dataObj$xMax / 2)
+    idSamp <- 1:4
+  } else if (model == "ColcheroMuller") {
     nBe <- 4
-    startBet <- c(-2, 0.01, 0.001, -4)
-    priorMean <-c(-2, 0.01, 0.001, -4)
-    priorSd <- c(2, 0.5, 0.5, 2)
-    lowBet <- c(0, 0, 0, -Inf)
-    jumpBet <- c(1, 0.2, 0.2, 1)
-    jitter <- c(1, 0.2, 0.2, 1)
-  } else if (modelFert == "Hadwiger") {
+    lowBe <- c(0, 0, 0, -Inf)
+    uppBe <- rep(Inf, 4)
+    startBe <- c(1, 0.005, 0.0001, -1)
+    priorMeanBe <- c(1, 0.005, 0.0001, -1)
+    idSamp <- 1:4
+  } else if (model == "Hadwiger") {
     nBe <- 3
     lowBe <- c(0, 0, 0)
-    startBet <- c(1, 2, 10)
-    priorMean <-c(1, 2, 10)
-    priorSd <- c(2, 2, 5)
-    lowBet <- c(0, 0, 0)
-    jumpBet <- c(0.2, 0.2, 1)
-    jitter <- c(0.2, 0.2, 1)
-  } else if (modelFert == "gamma") {
+    uppBe <- rep(Inf, 3)
+    startBe <- c(15, 1, 20)
+    priorMeanBe <- c(15, 1, 20)
+    idSamp <- 1:3
+  } else if (model == "gamma") {
     nBe <- 3
-    startBet <- c(2, 2, 0.1)
-    priorMean <-c(1, 1, 0.5)
-    priorSd <- c(2, 2, 1)
-    lowBet <- c(0, 0, 0)
-    jumpBet <- c(0.2, 0.2, 0.1)
-    jitter <- c(0.5, 0.5, 0.2)
+    lowBe <- c(0, 0, 0)
+    uppBe <- rep(Inf, 3)
+    startBe <- c(2, 2, 0.1)
+    priorMeanBe <- c(2, 2, 0.1)
+    idSamp <- 1:3
+  } else if (model == "beta") {
+    nBe <- 5
+    lowBe <- rep(0, 5)
+    uppBe <- rep(Inf, 5)
+    startBe <- c(10, 1.5, 2.5, 0, dataObj$xMax)
+    priorMeanBe <- c(10, 1.5, 2.5, 0, dataObj$xMax)
+    idSamp <- 1:3
+  } else if (model == "skewNormal") {
+    nBe <- 4
+    lowBe <- rep(0, 4)
+    uppBe <- rep(Inf, 4)
+    startBe <- c(5, 20, 5, 5)
+    priorMeanBe <- c(5, 20, 5, 5)
+    idSamp <- 1:4
+  } else if (model == "gammaMixture") {
+    nBe <- 6
+    lowBe <- rep(0, 6)
+    uppBe <- c(Inf, 1, rep(Inf, 4))
+    startBe <- c(20, 0.2, 1.5, 0.25, 4, 0.2)
+    priorMeanBe <- c(20, 0.2, 1.5, 0.25, 4, 0.2)
+    idSamp <- 1:6
+  } else if (model == "HadwigerMixture") {
+    nBe <- 6
+    lowBe <- rep(0, 6)
+    uppBe <- c(Inf, 1, rep(Inf, 4))
+    startBe <- c(1, 1, 10, 1.25, 30)
+    priorMeanBe <- c(1, 0.2, 1, 10, 1.25, 30)
+    idSamp <- 1:6
+  } else if (model == "skewSymmetric") {
+    nBe <- 5
+    lowBe <- c(rep(0, 4), -Inf)
+    uppBe <- rep(Inf, 5)
+    startBe <- c(5, 10, 20, 1, -0.5)
+    priorMeanBe <- c(5, 10, 20, 1, -0.5)
+    idSamp <- 1:5
+  } else if (model == "skewLogistic") {
+    nBe <- 5
+    lowBe <- c(rep(0, 4), -Inf)
+    uppBe <- rep(Inf, 5)
+    startBe <- c(5, 10, 20, 1, -0.5)
+    priorMeanBe <- c(5, 10, 20, 1, -0.5)
+    idSamp <- 1:5
   }
-  nameBet <- sprintf("b%s", 1:nBe - 1)
-  if (is.matrix(beta)) {
-    nbeUser <- ncol(beta)
-    clBe <- "matrix"
-    stBe <- "columns"
-  } else if (is.numeric(beta)) {
-    nbeUser <- length(beta)
-    clBe <- "vector"
-    stBe <- "elements"
-  } else {
-    stop("The beta parameters should either be of class matrix", 
-         " or a numeric vector.\n", call. = FALSE)
-  }
-  if (nbeUser != nBe) {
-    stop(sprintf("The beta %s should have %s %s.\n", clBe, nBe, stBe),
-         call. = FALSE)
-  } else {
-    if (is.matrix(beta)) {
-      colnames(beta) <- nameBe
-    } else {
-      names(beta) <- nameBe
-    }
-  }
-  # check if beta parameters conform to their support:
-  if (is.matrix(beta)) {
-    BETLOW <- all(sapply(1:nBe, function(bi) {
-      bl <- all(beta[, bi] >= lowBe[bi])
-    }))
-  } else {
-    BETLOW <- all(beta >= lowBe)
-  }
-  if(!BETLOW) {
-    stop(sprintf("Some beta parameters are below their lower bound.\n %s.\n",
-                 paste(sprintf("min(%s) = %s", nameBe, lowBe), 
-                       collapse = ", ")),
-         call. = FALSE)
-    
-  }
-  defaultBeta  <- list(length = nTh, start = startTh, jump = jumpTh, 
-                       priorMean = priorMean, priorSd = priorSd, name = nameTh, 
-                       low = lowTh, jitter = jitter)
-  attr(defaultBeta, "model") = algObj$model
+  priorSdBe <- rep(1, nBe)
+  nameBe <- sprintf("b%s", 1:nBe - 1)
+  names(startBe) <- nameBe
+  defaultBeta  <- list(beta = startBe, priorMean = priorMeanBe, 
+                       priorSD = priorSdBe, p = nBe, name = nameBe, low = lowBe, 
+                       upp = uppBe, idSamp = idSamp, pSamp = length(idSamp))
+  attr(defaultBeta, "model") = model
   return(defaultBeta)
 }
 
-# B.4) Fecundity models:
-# ---------------------- #
+# Define parameter object:
+.BuildParObj <- function(algObj, dataObj) {
+  # NA on random effects (to be replaced based on need):
+  uSd <- NA
+  uPrior1 <- NA
+  uPrior2 <- NA
+  vSd <- NA
+  vPrior1 <- NA
+  vPrior2 <- NA
+  
+  # Basic beta parameters:
+  defBet <- .SetDefaultBeta(algObj = algObj, dataObj = dataObj)
+  if (algObj$dataType %in% c("indivSimple", "indivExtended")) {
+    uSd <- 0.5
+    uPrior1 <- 0.01
+    uPrior2 <- 0.1
+  } 
+  if (algObj$dataType == "indivExtended") {
+    etaStart <- 1 / mean(dataObj$z[which(dataObj$data$First == 0)])
+    gammaStart <- 1 / mean(dataObj$w[which(dataObj$data$First == 1)])
+    theta <- c(defBet$beta, eta = etaStart, gamma = gammaStart)
+    thetaPriorMean <- c(defBet$priorMean, eta = 1, gamma = 1)
+    thetaPriorSD <- c(defBet$priorSD, eta = 1, gamma = 1)
+    thetaLower <- c(defBet$low, 0, 0)
+    thetaUpper <- c(defBet$upp, Inf, Inf)
+    idSamp <- c(defBet$idSamp, defBet$p + c(1:2))
+
+    # Random effects for IBI:
+    vSd <- 0.5
+    vPrior1 <- 0.01
+    vPrior2 <- 0.1
+    
+  } else {
+    theta <- defBet$beta
+    thetaPriorMean <- defBet$priorMean
+    thetaPriorSD <- defBet$priorSD
+    thetaLower <- defBet$low
+    thetaUpper <- defBet$upp
+    idSamp <- defBet$idSamp
+  }
+  parList <- list(thetaStart = theta, thetaPriorMean = thetaPriorMean, 
+                  thetaPriorSD = thetaPriorSD, thetaLower = thetaLower,
+                  thetaUpper = thetaUpper, thetaName = names(theta),
+                  p = length(theta), idSamp = idSamp, 
+                  pSamp = length(idSamp), uSd = uSd, uPrior1 = uPrior1, 
+                  uPrior2 = uPrior2, vSd = vSd, vPrior1 = vPrior1, 
+                  vPrior2 = vPrior2)
+  return(parList)
+}
+
+# ------------------------ #
+# ---- Distributions: ----
+# ------------------------ #
+# Truncated normal:
+.rtnorm <- function(n, mean, sd, lower = -Inf, upper = Inf) {
+  Flow <- pnorm(lower, mean, sd)
+  Fup <- pnorm(upper, mean, sd)
+  ru <- runif(n, Flow, Fup)
+  rx <- .qtnorm(ru, mean, sd, lower = lower, upper = upper)
+  return(rx)
+}
+
+.dtnorm <- function(x, mean, sd, lower = -Inf, upper = Inf, log = FALSE) {
+  Flow <- pnorm(lower, mean, sd)
+  Fup <- pnorm(upper, mean, sd)
+  densx <- dnorm(x, mean, sd) / (Fup - Flow)
+  if (log) densx <- log(densx)
+  return(densx)
+}
+
+.ptnorm <- function(q, mean, sd, lower = -Inf, upper = Inf, log = FALSE) {
+  p <- (pnorm(q, mean, sd) - pnorm(lower, mean, sd)) / 
+    (pnorm(upper, mean, sd) - pnorm(lower, mean, sd))
+  if (log) {
+    p <- log(p)
+  }
+  return(p)
+}
+
+.qtnorm <- function (p, mean = 0, sd = 1, lower = -Inf, upper = Inf) {
+  p2 <- (p) * (pnorm(upper, mean, sd) - pnorm(lower, mean, sd)) + 
+    pnorm(lower, mean, sd)
+  q <- qnorm(p2, mean, sd)
+  return(q)
+}
+
+
+# --------------------------- #
+# ---- Fertility models: ----
+# --------------------------- #
 # For matrix of parameters:
 .DefineFertilityMatrix <- function(modelFert = "quadratic") {
   if (modelFert == "quadratic") {
@@ -553,7 +962,65 @@ print.bafta <- function(x, ...) {
                                     rate = beta[, "b2"])
       return(fert)
     }
-  } 
+  } else if (modelFert == "beta") {
+    fertfun <- function(beta, x) {
+      fert <- beta[, "b0"] * ((x - beta[, "b3"])^(beta[, "b1"] - 1) * 
+                                (beta[, "b4"] - x)^(beta[, "b2"] - 1)) / 
+        ((beta[, "b4"] - beta[, "b3"])^(beta[, "b1"] + beta[, "b2"] - 1) * 
+           beta(beta[, "b1"], beta[, "b2"]))
+      return(fert)
+    }
+  } else if (modelFert == "skewNormal") {
+    fertfun <- function(beta, x) {
+      fert <- beta[, "b0"] * 2 * 1/beta[, "b1"] * 
+        dnorm((x - beta[, "b2"]) / beta[, "b1"]) * 
+        pnorm(beta[, "b3"] * ((x - beta[, "b2"]) / beta[, "b1"]))
+      return(fert)
+    }
+  } else if (modelFert == "gammaMixture") {
+    fertfun <- function(beta, x) {
+      fert <- beta[, "b0"] * (beta[, "b1"] * 
+                                dgamma(x, shape = beta[, "b2"], 
+                                       rate = beta[, "b3"]) +
+                                (1 - beta[, "b1"]) * 
+                                dgamma(x, shape = beta[, "b4"], 
+                                       rate = beta[, "b5"]))
+      return(fert)
+    }
+  } else if (modelFert == "HadwigerMixture") {
+    fertfun <- function(beta, x) {
+      fert <- beta[, "b0"] * 
+        (beta[, "b1"] * 
+           (beta[, "b2"] / beta[, "b3"] * (beta[, "b3"]/x)^(3/2) * 
+              exp(-beta[, "b2"]^2 * (beta[, "b3"] / x + 
+                                       x / beta[, "b3"] - 2))) +
+           (1 - beta[, "b1"]) * 
+           (beta[, "b4"] / beta[, "b5"] * (beta[, "b5"]/x)^(3/2) * 
+              exp(-beta[, "b4"]^2 * (beta[, "b5"] / x + 
+                                       x / beta[, "b5"] - 2))))
+      return(fert)
+    }
+  } else if (modelFert == "skewSymmetric") {
+    fertfun <- function(beta, x) {
+      fert <- beta[, "b0"] * 2 * 1/beta[, "b1"] * 
+        dnorm((x - beta[, "b2"]) / beta[, "b1"]) * 
+        pnorm(beta[, "b3"] * ((x - beta[, "b2"]) / beta[, "b1"]) + 
+                beta[, "b4"] * ((x - beta[, "b2"]) / beta[, "b1"])^3)
+      return(fert)
+    }
+    
+  } else if (modelFert == "skewLogistic") {
+    fertfun <- function(beta, x) {
+      fert <- beta[, "b0"] * 2 * 1 / beta[, "b1"] * 
+        ((exp(-(x - beta[, "b2"]) / beta[, "b1"])) / 
+           ((1 + exp(-(x - beta[, "b2"]) / beta[, "b1"]))^2 *
+              (1 + exp(-beta[, "b3"] * (x - beta[, "b2"]) / beta[, "b1"] - 
+                         beta[, "b4"] * ((x - beta[, "b2"]) / 
+                                           beta[, "b1"])^3))))
+      return(fert)
+    }
+    
+  }
   return(fertfun)
 }
 
@@ -566,9 +1033,9 @@ print.bafta <- function(x, ...) {
     }
   } else if (modelFert == "PeristeraKostaki") {
     fertfun <- function(beta, x) {
-      be1 <- x * 0 + beta["b1a"]
-      be1[which(x > beta["b2"])] <- beta["b1b"]
-      fert <- beta["b0"] * exp(-((x - beta["b2"]) / be1)^2)
+      be1 <- x * 0 + beta["b1"]
+      be1[which(x > beta["b3"])] <- beta["b2"]
+      fert <- beta["b0"] * exp(-((x - beta["b3"]) / be1)^2)
       return(fert)
     }
   } else if (modelFert == "ColcheroMuller") {
@@ -589,442 +1056,517 @@ print.bafta <- function(x, ...) {
       fert <- beta["b0"] * dgamma(x, shape = beta["b1"], rate = beta["b2"])
       return(fert)
     }
-  } 
+  } else if (modelFert == "beta") {
+    fertfun <- function(beta, x) {
+      fert <- beta["b0"] * ((x - beta["b3"])^(beta["b1"] - 1) * 
+                              (beta["b4"] - x)^(beta["b2"] - 1)) / 
+        ((beta["b4"] - beta["b3"])^(beta["b1"] + beta["b2"] - 1) * 
+           beta(beta["b1"], beta["b2"]))
+      return(fert)
+    }
+  } else if (modelFert == "skewNormal") {
+    fertfun <- function(beta, x) {
+      fert <- beta["b0"] * 2 * 1/beta["b1"] * 
+        dnorm((x - beta["b2"]) / beta["b1"]) * 
+        pnorm(beta["b3"] * ((x - beta["b2"]) / beta["b1"]))
+      return(fert)
+    }
+  } else if (modelFert == "gammaMixture") {
+    fertfun <- function(beta, x) {
+      fert <- beta["b0"] * (beta["b1"] * 
+                              dgamma(x, shape = beta["b2"], 
+                                     rate = beta["b3"]) +
+                              (1 - beta["b1"]) * dgamma(x, shape = beta["b4"],
+                                                        rate = beta["b5"]))
+      return(fert)
+    }
+  } else if (modelFert == "HadwigerMixture") {
+    fertfun <- function(beta, x) {
+      fert <- beta["b0"] * 
+        (beta["b1"] * (beta["b2"]/beta["b3"] * (beta["b3"]/x)^(3/2) * 
+                         exp(-beta["b2"]^2 * 
+                               (beta["b3"] / x + x / beta["b3"] - 2))) +
+           (1 - beta["b1"]) * 
+           (beta["b4"]/beta["b5"] * (beta["b5"]/x)^(3/2) * 
+              exp(-beta["b4"]^2 * (beta["b5"] / x + x / beta["b5"] - 2))))
+      return(fert)
+    }
+  } else if (modelFert == "skewSymmetric") {
+    fertfun <- function(beta, x) {
+      fert <- beta["b0"] * 2 * 1/beta["b1"] * 
+        dnorm((x - beta["b2"]) / beta["b1"]) * 
+        pnorm(beta["b3"] * ((x - beta["b2"]) / beta["b1"]) + 
+                beta["b4"] * ((x - beta["b2"]) / beta["b1"])^3)
+      return(fert)
+    }
+  } else if (modelFert == "skewLogistic") {
+    fertfun <- function(beta, x) {
+      fert <- beta["b0"] * 2 * 1 / beta["b1"] * 
+        ((exp(-(x - beta["b2"]) / beta["b1"])) / 
+           ((1 + exp(-(x - beta["b2"]) / beta["b1"]))^2 *
+              (1 + exp(-beta["b3"] * (x - beta["b2"]) / beta["b1"] - 
+                         beta["b4"] * ((x - beta["b2"]) / beta["b1"])^3))))
+      return(fert)
+    }
+  }
   return(fertfun)
 }
 
-# Calculate Fertility:
-.CalcFert <- function(beta, x, modelFert = "quadratic", checkBeta = TRUE) {
-  
-  # Verify fertility model:
-  .VerifyFertMod(modelFert = modelFert)
-  
-  # Extract beta attributes:
-  if (checkBeta) {
-    betaAttr <- .SetBeta(beta, modelFert = modelFert)
-    beta <- betaAttr$beta
-  }
-  
-  # a) Fertility method:
-  .CalcFert <- function(beta, ...) UseMethod(".CalcFert")
-  .CalcFert.matrix <- .DefineFertilityMatrix(modelFert = modelFert)
-  .CalcFert.numeric <- .DefineFertilityNumeric(modelFert = modelFert)
-  
-  # b) Calculate Fertility:
-  fertfun <- .CalcFert(beta, x)
-  return(fertfun)
+# ------------------------------------------ #
+# ---- Likelihood, posterior, sampling: ----
+# ------------------------------------------ #
+# Likelihood function:
+.CalcLikeFert <- function(dataObj, ...) UseMethod(".CalcLikeFert")
+
+.CalcLikeFert.baftaAggr <- function(dataObj, pars, FertFun, 
+                                    FertFun.numeric) {
+  fert <- FertFun(beta = pars$theta, x = dataObj$x)
+  lk <- dpois(dataObj$data$nOffspring[dataObj$idages], 
+              lambda = dataObj$data$nParents[dataObj$idages] * fert, 
+              log = TRUE)
+  return(lk)
 }
 
-
-# Binomial or Poisson likelihood:
-like <- function(ga, sig, u, xi, yi, zi, np, binom = TRUE, fec, 
-                 randEffs = FALSE, forPars = TRUE) {
-  fi <- fec(xi, ga) * c(exp(zi %*% u))
-  if (binom) {
-    lka <- dbinom(yi, 1, fi, log = TRUE)
-  } else {
-    lka <- dpois(yi, fi, log = TRUE)
-  }
-  if (randEffs) {
-    lkr <- dnorm(u, mean = 0, sd = sig, log = TRUE)
-  } else {
-    lkr <- 0
-  }
-  if (forPars) {
-    lk <- sum(lka) + sum(lkr)
-  } else {
-    lk <- c(t(lka * zi) %*% rep(1, n)) + lkr
-  }
-  return(list(full = lk, a = sum(lka)))
+.CalcLikeFert.baftaIndSimp <- function(dataObj, pars, FertFun, 
+                                       FertFun.numeric) {
+  fert <- FertFun(beta = pars$theta, x = dataObj$x) * 
+    exp(c(dataObj$rMat %*% pars$u))
+  lk <- dpois(dataObj$data$nOffspring, lambda = fert, log = TRUE)
+  return(lk)
 }
 
-# Calculate age at maximum fecundity:
-CalcAgeMaxFec <- function(b, fecmod = 1, xstart = 10, minAge = 0) {
-  # Extract fecundity model and parameters:
-  feclist <- fecMods[[sprintf("mod%s", fecmod)]]
-  fec <- feclist$fun
-  np <- feclist$np
-  bfull <- b
-  if (fecmod == 1) {
-    b <- bfull[-1]
-    an <- rep(0, 10)
-    x0 <- xstart
-    dd <- 1
-    ii <- 0
-    while (dd > 0.0001 & ii <= 25) {
-      ii <- ii + 1
-      x <- x0
-      x1 <- x - (x^3 - x^2 * ((b[1] - 4 * b[2]) / (2 * b[2])) - 
-                   x * ((b[1] - b[2]) / b[2]) - (b[1] - b[3]) / (2 * b[2])) / 
-        (3 * x^2 - x * 2 * ((b[1] - 4 * b[2]) / (2 * b[2])) - 
-           ((b[1] - b[2]) / b[2]))
-      dd <- abs(x1 - x0)
-      x0 <- x1
-    }
-    if (dd < 0.0001) {
-      xm <- x1
-      fecmax <- fec(xm, bfull[1:np])
-      xm <- xm + minAge
-    } else {
-      xm <- NA
-      fecmax <- NA
-    }
-  } else if (fecmod == 0) {
-    b <- bfull[-1]
-    xm <- b[1] / (2 * b[2]) 
-    fecmax <- fec(xm, bfull[1:np])
-    xm <- xm + minAge
-    dd <- NA
-    ii <- NA
-  } else if (fecmod == 3) {
-    dd <- 1
-    dx <- 0.1
-    xv <- seq(0, b[3] * 5, dx)
-    ii <- 0
-    while (dd > 0.000001 & ii <= 10) {
-      ii <- ii + 1
-      ddv <- abs(-2 * b[1] * b[2] * (xv - b[3]) * exp(-b[2] * (xv - b[3])^2) * 
-                  (1 + exp(-b[4] * (xv - b[5]))) + b[1] * b[4] * 
-                  exp(-b[2] * (xv - b[3])^2) *
-                  exp(-b[4] * (xv - b[5])))
-      idxmax <- which(ddv == min(ddv))
-      x1 <- xv[idxmax]
-      dd <- ddv[idxmax]
-      dx <- dx / ii
-      xv <- x1 + seq(- 3 * dx, 3 * dx, dx)
-    }
-    if (dd < 0.000001) {
-      xm <- x1
-      fecmax <- fec(xm, bfull[1:np])
-      xm <- xm + minAge
-    } else {
-      xm <- NA
-      fecmax <- NA
-    }
-  } else {
-    xm <- NA
-    fecmax <- NA
-    dd <- NA
-    ii <- NA
-  }
-  return(c(xm = xm, fmax = fecmax, dd = dd, niter = ii))
+# Likelihood function:
+.CalcLikeFert.baftaIndExt <- function(dataObj, pars, FertFun, 
+                                      FertFun.numeric) {
+  fert <- FertFun(beta = pars$theta, x = dataObj$x) * 
+    exp(c(dataObj$rMat %*% pars$u))
+  lk <- dpois(dataObj$data$nOffspring, lambda = fert, log = TRUE) +
+    dexp(dataObj$z, rate = pars$theta["eta"] * 
+           exp(c(dataObj$rMat %*% pars$v)), log = TRUE) * 
+    (1 - dataObj$data$First) +
+    dexp(dataObj$w, rate = pars$theta["gamma"], log = TRUE) * 
+    dataObj$data$First
+  return(lk)
 }
 
-# Truncated normal:
-.rtnorm <- function(n, mean, sd, lower = -Inf, upper = Inf) {
-  Flow <- pnorm(lower, mean, sd)
-  Fup <- pnorm(upper, mean, sd)
-  ru <- runif(n, Flow, Fup)
-  rx <- qnorm(ru, mean, sd)
-  return(rx)
+# Posterior for Beta:
+.CalcPostTheta <- function(pars, like, parObj) {
+  post <- sum(like) + sum(.dtnorm(pars$theta, mean = parObj$thetaPriorMean, 
+                                 sd = parObj$thetaPriorSD, 
+                                 lower = parObj$thetaLower, 
+                                 upper = parObj$thetaUpper, log = TRUE))
+  return(post)
 }
 
-.dtnorm <- function(x, mean, sd, lower = -Inf, upper = Inf, log = FALSE) {
-  Flow <- pnorm(lower, mean, sd)
-  Fup <- pnorm(upper, mean, sd)
-  densx <- dnorm(x, mean, sd) / (Fup - Flow)
-  if (log) densx <- log(densx)
-  return(densx)
+# Metropolis-Hastings ratio:
+.CalcMHratio <- function(parsNow, parsNew, jumpSD, parObj, ip) {
+  MHr <- .dtnorm(parsNow$theta[ip], mean = parsNew$theta[ip], sd = jumpSD[ip],
+                lower = parObj$thetaLower[ip], upper = parObj$thetaUpper[ip], 
+                log = TRUE) -
+    .dtnorm(parsNew$theta[ip], mean = parsNow$theta[ip], sd = jumpSD[ip],
+           lower = parObj$thetaLower[ip], upper = parObj$thetaUpper[ip], 
+           log = TRUE)
+  return(MHr)
+}
+
+# Posterior for random effects on fertility:
+.CalcPostRandEffU <- function(dataObj, pars, like) {
+  postu <- c(t(like * dataObj$rMat) %*% rep(1, dataObj$n)) + 
+    dnorm(pars$u, mean = 0, sd = pars$uSd, log = TRUE)
+  return(postu)
+}
+
+# Sampling fertility random effects variance:
+.SampleUSig <- function(dataObj, pars, parObj) {
+  u1 <- parObj$uPrior1 + dataObj$ni / 2
+  u2 <- parObj$uPrior2 + 0.5 * sum(pars$u^2) 
+  sig <- sqrt(1 / rgamma(1, u1, u2))
+  return(sig)
+}
+
+# Posterior for random effects on IBI:
+.CalcPostRandEffV <- function(dataObj, pars, like) {
+  postv <- c(t(like * dataObj$rMat * (1 - dataObj$data$First)) 
+             %*% rep(1, dataObj$n))[dataObj$idv] + 
+    dnorm(pars$v[dataObj$idv], mean = 0, sd = pars$vSd, log = TRUE)
+  return(postv)
+}
+
+# Sampling IBI random effects variance:
+.SampleVSig <- function(dataObj, pars, parObj) {
+  v1 <- parObj$vPrior1 + dataObj$niv / 2
+  v2 <- parObj$vPrior2 + 0.5 * sum(pars$v[dataObj$idv]^2) 
+  sig <- sqrt(1 / rgamma(1, v1, v2))
+  return(sig)
 }
 
 # Function to update jumps in MCMC:
-.UpdateJumps <- function(jumps, updMat, iter, iterUpd = 100, updTarg = 0.25) {
+.UpdateJumps <- function(updMat, jumps, iter, iterUpd = 50, 
+                                updTarg = 0.25) {
   updRate <- apply(updMat[iter - ((iterUpd - 1):0), ], 2, sum) / iterUpd  
   updRate[updRate == 0] <- 1e-2
   jumps <- jumps * updRate / updTarg
   return(jumps)
 }
 
-# MCMC function:
-.RunMCMC <- function(sim, fecmod = 1, niter = 11000, burnin = 1001, 
-                    updJump = TRUE, jumps = NULL, randEffs = FALSE, 
-                    jumpInt = 50) {
+# =============== #
+# ==== MCMC: ====
+# =============== #
+.RunMCMC <- function(sim, dataObj, parObj, niter, algObj, FertFun, 
+                    FertFun.numeric, FertFun.matrix,
+                    jumpSD = NULL, UPDJUMP = TRUE) {
   # Restart the random seed for each core:
   if (sim > 1) {
     rm(".Random.seed", envir = .GlobalEnv); runif(1)
   }
   
-  # Extract fecundity model and parameters:
-  feclist <- fecMods[[sprintf("mod%s", fecmod)]]
-  fec <- feclist$fun
-  np <- feclist$np
+  # Create sampling parameter object:
+  parsNow <- list(theta = parObj$thetaStart)
   
-  # Fecundity parameter names:
-  parnames <- sprintf("a%s", 1:np)
-  
-  # Priors:
-  parmean <- feclist$mean
-  parsd <- rep(20, np)
-  
-  # Lower bound of parameter support:
-  parlow <- feclist$low
-  
-  # Initial values:
-  parini <- feclist$ini
-  
-  # Random effects parameters:
-  if (randEffs) {
-    signow <- 0.1
-    unow <- rnorm(ni, mean = 0, sd = signow)
-    s1 <- 0.01
-    s2 <- 0.1
+  # Fertility random effects parameter:
+  if (grepl("indiv", algObj$dataType)) {
+    RANDEFFU <- TRUE
+    parsNow$u <- rep(0, dataObj$ni)
+    parsNow$uSd <- 1
   } else {
-    signow <- 0
-    unow <- 0
-    zi <- 0
+    RANDEFFU <- FALSE
   }
   
-  # Jump sds:
-  if (updJump) {
-    parjump <- rep(0.1, np)
-    # Jump matrix setup:
-    parjumpMat <- parjump
-    updMat <- matrix(0, nrow = burnin, ncol = np)
+  # IBI random effects parameter:
+  if (algObj$dataType == "indivExtended") {
+    RANDEFFV <- TRUE
+    parsNow$v <- rep(0, dataObj$ni)
+    parsNow$vSd <- 1
   } else {
-    parjump <- jumps
-    parjumpMat <- NA
+    RANDEFFV <- FALSE
   }
   
-  # ga, u, xi, yi, zi, binom = TRUE, fec
-  # Start parameters and calculate conditional posterior:
-  parnow <- rtnorm(1, mean = parini, sd = abs(parini) * 0.2, lower = parlow)
-  likenow <- like(parnow, signow, unow, xi, yi, zi, np, binom = binom, fec, 
-                  randEffs = randEffs)
-  postnow <- likenow$a + sum(dtnorm(parnow, parmean, parsd, lower = parlow, 
-                                  log = TRUE)) 
-  while (postnow == -Inf | is.na(postnow)) {
-    parnow <- rtnorm(1, mean = parini, sd = abs(parini) * 0.2, lower = parlow)
-    likenow <- like(parnow, signow, unow, xi, yi, zi, np, binom = binom, fec, 
-                    randEffs = randEffs)
-    postnow <- likenow$a + 
-      sum(dtnorm(parnow, parmean, parsd, lower = parlow, log = TRUE))
+  # Jitter parameters:
+  if (sim > 1) {
+    parsNow$theta[parObj$idSamp] <- 
+      .rtnorm(n = 1, mean = parObj$thetaStart[parObj$idSamp], 
+              sd = rep(0.1, length(parObj$idSamp)), 
+              lower = parObj$thetaLower[parObj$idSamp],
+              upper = parObj$thetaUpper[parObj$idSamp])
   }
   
-  # Results matrices:
-  parmat <- matrix(0, niter, np, dimnames = list(NULL, parnames))
-  parmat[1, ] <- parnow
-  postmat <- matrix(0, niter, 3, dimnames = list(NULL, c("Post", "Likefull",
-                                                         "likea")))
-  postmat[1, ] <- c(postnow, likenow$full, likenow$a)
-  if (randEffs) {
-    postUnow <- like(parnow, signow, unow, xi, yi, zi, np, binom = binom, fec, 
-                     forPars = FALSE)$full
-    umat <- matrix(0, niter, ni)
-    umat[1, ] <- unow
-    sigvec <- rep(0, niter); sigvec[1] <- signow
+  # Calculate likelihood and posteriors:
+  likeNow <- .CalcLikeFert(dataObj = dataObj, pars = parsNow, FertFun = FertFun, 
+                           FertFun.numeric = FertFun.numeric)
+  postNow <- .CalcPostTheta(pars = parsNow, like = likeNow, 
+                            parObj = parObj)
+  if (RANDEFFU) {
+    postUNow <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNow, 
+                                 like = likeNow)
+  }
+  
+  if (RANDEFFV) {
+    postVNow <- .CalcPostRandEffV(dataObj = dataObj, pars = parsNow, 
+                                  like = likeNow)
+  }
+  
+  # Prepare jumps and outputs:
+  if (UPDJUMP) {
+    jumpSD <- rep(0.1, parObj$pSamp)
+    jumpOut <- matrix(jumpSD, nrow = 1, ncol = parObj$pSamp,
+                      dimnames = list(NULL, parObj$thetaName[parObj$idSamp]))
+    updJumpIter <- seq(50, niter, 50)
+    updateMat <- matrix(0, nrow = niter, ncol = parObj$pSamp,
+                        dimnames = list(NULL, parObj$thetaName[parObj$idSamp]))
+    parOut <- NA
+    likePostOut <- NA
+    uOut <- NA
+    uSdOut <- NA
+    vOut <- NA
+    vSdOut <- NA
+    
   } else {
-    umat <- NA
-    sigvec <- NA
+    parOut <- matrix(NA, nrow = niter, ncol = parObj$p,
+                     dimnames = list(NULL, parObj$thetaName))
+    likePostOut <- matrix(NA, nrow = niter, ncol = 2,
+                          dimnames = list(NULL, c("Likelihood", "Posterior")))
+    parOut[1, ] <- parsNow$theta
+    likePostOut[1, ] <- c(sum(likeNow), postNow)
+    if (RANDEFFU) {
+      uOut <- matrix(NA, nrow = niter, ncol = dataObj$ni)
+      uOut[1, ] <- parsNow$u
+      uSdOut <- rep(NA, niter)
+      uSdOut[1] <- parsNow$uSd
+    } else {
+      uOut <- NA
+      uSdOut <- NA
+    }
+    if (RANDEFFV) {
+      vOut <- matrix(NA, nrow = niter, ncol = dataObj$ni)
+      vOut[1, ] <- parsNow$v
+      vSdOut <- rep(NA, niter)
+      vSdOut[1] <- parsNow$vSd
+    } else {
+      vOut <- NA
+      vSdOut <- NA
+    }
+    
+    
   }
   
-  # ==============
-  # 4) MCMC run
-  # ============
   for (iter in 2:niter) {
-    for (pp in 1:(np)) {
-      parnew <- parnow
-      parnew[pp] <- rtnorm(n = 1, mean = parnow[pp], sd = parjump[pp], 
-                           lower = parlow[pp])
-      likenew <- like(parnew, signow, unow, xi, yi, zi, np, binom = binom, fec, 
-                      randEffs = randEffs) 
-      postnew <- likenew$a + sum(dtnorm(parnew, parmean, parsd, 
-                                           lower = parlow, log = TRUE)) 
-      if (!is.na(postnew)) {
-        hastRatio <- dtnorm(parnow[pp], mean = parnew[pp], sd = parjump[pp], 
-                            lower = parlow[pp]) / 
-          dtnorm(parnew[pp], mean = parnow[pp], sd = parjump[pp], 
-                 lower = parlow[pp])
-        acceptRatio <- exp(postnew - postnow) * hastRatio
-        if (acceptRatio > runif(1)) {
-          parnow <- parnew
-          likenow <- likenew
-          postnow <- postnew
-          if (updJump) {
-            if (iter < burnin) updMat[iter, pp] <- 1
-          }
-        }
+    for (ip in parObj$idSamp) {
+      idj <- which(parObj$idSamp == ip)
+      parsNew <- parsNow
+      parsNew$theta[ip] <- .rtnorm(n = 1, mean = parsNow$theta[ip], 
+                                   sd = jumpSD[idj],
+                                   lower = parObj$thetaLower[ip], 
+                                   upper = parObj$thetaUpper[ip])
+      likeNew <- .CalcLikeFert(dataObj = dataObj, pars = parsNew, 
+                               FertFun = FertFun, 
+                               FertFun.numeric = FertFun.numeric)
+      postNew <- .CalcPostTheta(pars = parsNew, like = likeNew, 
+                                parObj = parObj)
+      mhRatio <- .CalcMHratio(parsNow = parsNow, parsNew = parsNew, 
+                              jumpSD = jumpSD, parObj = parObj, ip = ip)
+      postRatio <- exp(postNew - postNow + mhRatio)
+      # ========== #
+      # Debugging SEC 2b:
+      if (DEBUG & iter == 2) {
+        cat("Sec 2b\n", file = logFile, append = TRUE)
+      }
+      # ========== #
+      
+      if (!is.na(postRatio)) {
+        if (postRatio > runif(n = 1)) {
+          parsNow <- parsNew
+          likeNow <- likeNew 
+          postNow <- postNew
+          if (UPDJUMP) updateMat[iter, idj] <- 1
+        }        
       }
     }
     
     # Random effects:
-    if (randEffs) {
+    if (RANDEFFU & iter / 2 == floor(iter / 2)) {
+      postUNow <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNow, 
+                                    like = likeNow)
       # Sample U values:
-      postUnow <- like(parnow, signow, unow, xi, yi, zi, np, binom = binom, 
-                       fec, forPars = FALSE, randEffs = randEffs)$full
-      unew <- rnorm(ni, mean = unow, sd = 0.5)
-      postUnew <- like(parnow, signow, unew, xi, yi, zi, np, binom = binom, 
-                       fec, forPars = FALSE, randEffs = randEffs)$full 
-      acceptRatio <- exp(postUnew - postUnow)
-      ranU <- runif(ni)
+      parsNew <- parsNow
+      parsNew$u <- rnorm(n = dataObj$ni, mean = parsNow$u, sd = 0.1)
+      likeNew <- .CalcLikeFert(dataObj = dataObj, pars = parsNew, 
+                               FertFun = FertFun, 
+                               FertFun.numeric = FertFun.numeric)
+      postUNew <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNew, 
+                                    like = likeNew)
+      acceptRatio <- exp(postUNew - postUNow)
+      ranU <- runif(dataObj$ni)
       idUpd <- which(acceptRatio > ranU)
-      unow[idUpd] <- unew[idUpd]
-      postUnow[idUpd] <- postUnew[idUpd]
-      likenow <- like(parnow, signow, unow, xi, yi, zi, np, binom = binom, fec, 
-                      randEffs = randEffs)
-      postnow <- likenow$a + 
-        sum(dtnorm(parnow, parmean, parsd, lower = parlow, log = TRUE))
-      umat[iter, ] <- unow
+      parsNow$u[idUpd] <- parsNew$u[idUpd]
+      postUNow[idUpd] <- postUNew[idUpd]
+      likeNow <- .CalcLikeFert(dataObj = dataObj, pars = parsNow, 
+                               FertFun = FertFun, 
+                               FertFun.numeric = FertFun.numeric)
+      postNow <- .CalcPostTheta(pars = parsNow, like = likeNow, 
+                                parObj = parObj)
       
       # Sample sigma:
-      u1 <- s1 + ni / 2
-      u2 <- s2 + 0.5 * sum(unow^2) 
-      signow <- 1 / rgamma(1, u1, u2)
-      sigvec[iter] <- signow
+      parsNow$uSd <- .SampleUSig(dataObj = dataObj, pars = parsNow, 
+                                 parObj = parObj)
+      postUNow <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNow, 
+                                    like = likeNow)
+      
     } 
     
-    # Fill up output matrices:
-    parmat[iter, ] <- parnow
-    postmat[iter, ] <- c(postnow, likenow$full, likenow$a)
+    # Random effects:
+    if (RANDEFFV & iter / 2 == floor(iter / 2)) {
+      postVNow <- .CalcPostRandEffV(dataObj = dataObj, pars = parsNow, 
+                                    like = likeNow)
+      # Sample U values:
+      parsNew <- parsNow
+      parsNew$v[dataObj$idv] <- rnorm(n = dataObj$niv, 
+                                      mean = parsNow$v[dataObj$idv], sd = 0.1)
+      likeNew <- .CalcLikeFert(dataObj = dataObj, pars = parsNew, 
+                               FertFun = FertFun, 
+                               FertFun.numeric = FertFun.numeric)
+      postVNew <- .CalcPostRandEffV(dataObj = dataObj, pars = parsNew, 
+                                    like = likeNew)
+      acceptRatio <- exp(postVNew - postVNow)
+      ranV <- runif(dataObj$niv)
+      idUpd <- which(acceptRatio > ranV)
+      parsNow$v[dataObj$idv[idUpd]] <- parsNew$v[dataObj$idv[idUpd]]
+      postVNow[dataObj$idv[idUpd]] <- postVNew[dataObj$idv[idUpd]]
+      likeNow <- .CalcLikeFert(dataObj = dataObj, pars = parsNow, 
+                               FertFun = FertFun, 
+                               FertFun.numeric = FertFun.numeric)
+      postNow <- .CalcPostTheta(pars = parsNow, like = likeNow, 
+                                parObj = parObj)
+      postUNow <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNow, 
+                                    like = likeNow)
+      
+      # Sample sigma:
+      parsNow$vSd <- .SampleVSig(dataObj = dataObj, pars = parsNow, 
+                                 parObj = parObj)
+      postVNow <- .CalcPostRandEffV(dataObj = dataObj, pars = parsNow, 
+                                    like = likeNow)
+      
+    } 
     
     # Update jumps:
-    if (updJump) {
-      if(iter %in% c(1:((burnin - 1) / jumpInt) * jumpInt)) {
-        parjump <- .UpdateJumps(parjump, updMat, iter, jumpInt, 0.25)
-        parjumpMat <- rbind(parjumpMat, parjump)
-        if (iter == burnin) {
-          idjmean <- round(nrow(parjumpMat) / 2):nrow(parjumpMat)
-          parjump <- apply(parjumpMat[idjmean, ], 2, mean)
-        }
+    if (UPDJUMP) {
+      if (iter %in% updJumpIter) {
+        jumpSD <- .UpdateJumps(updMat = updateMat, jumps = jumpSD, 
+                               iter = iter)
+        jumpOut <- rbind(jumpOut, jumpSD)
+      }
+    } else {
+      parOut[iter, ] <- parsNow$theta
+      likePostOut[iter, ] <- c(sum(likeNow), postNow)
+      if (RANDEFFU) {
+        uOut[iter, ] <- parsNow$u
+        uSdOut[iter] <- parsNow$uSd
+      }
+      if (RANDEFFV) {
+        vOut[iter, ] <- parsNow$v
+        vSdOut[iter] <- parsNow$vSd
       }
     }
   }
-  output <- list(params = parmat, postLike = postmat, jumps = parjump, 
-                 jumpmat = parjumpMat, umat = umat, sigma = sigvec, 
-                 settings = c(fecmod = fecmod, randEffs = randEffs))
-  class(output) <- "baftamcmc"
-  return(output)
+  
+
+  if (UPDJUMP) {
+    nJumps <- nrow(jumpOut)
+    idJumps <- floor(nJumps / 2):nJumps
+    jumpSdFin <- apply(jumpOut[idJumps, ], 2, mean)
+  } else {
+    jumpSdFin <- jumpSD
+    jumpOut <- NA
+  }
+  outList <- list(theta = parOut, likePost = likePostOut, u = uOut,
+                  uSd = uSdOut, v = vOut, vSd = vSdOut, jumps = jumpSdFin, 
+                  jumpMat = jumpOut)
+  
+  return(outList)
 }
 
-
-# Function to extract data from parallel MCMC:
-ExtractMCMC <- function(out) {
-  
-  # output list:
-  outlist <- list()
-  fecmod <- out[[1]]$settings["fecmod"]
-  randEffs <- out[[1]]$settings["randEffs"]
-  
-  # Find values to keep for summary statistics:
-  keep <- ceiling(seq(burnin, niter, thinning))
-  
-  # Extract fecundity model:
-  fec <- fecMods[[sprintf("mod%s", fecmod)]]$fun
-  np <- fecMods[[sprintf("mod%s", fecmod)]]$np
-  
-  # Extract MCMC parameter values:
-  parmatfull <- out[[1]]$params
-  if (randEffs == 1) parmatfull <- cbind(parmatfull, sigma = out[[1]]$sigma)
-  parmat <- parmatfull[keep, ]
-  likePost <- out[[1]]$postLike[keep, ]
-  for (i in 2:nsim) {
-    pmfulli <- out[[i]]$params
-    if (randEffs == 1) pmfulli <- cbind(pmfulli, sigma = out[[i]]$sigma)
-    parmatfull <- rbind(parmatfull, pmfulli)
-    parmat <- rbind(parmat, pmfulli[keep, ])
-    likePost <- rbind(likePost, out[[i]]$postLike[keep, ])
-  }
-  
-  # Extract results:
-  # Coefficients and their SE and CIs:
-  coeffs <- cbind(Mean = apply(parmat, 2, mean), SE = apply(parmat, 2, sd),
-                  "2.5%" = apply(parmat, 2, quantile, 0.025),
-                  "97.5%" = apply(parmat, 2, quantile, 0.975))
-  
-  # Fecundity CIs:
-  fecMat <- t(apply(parmat, 1, function(aa) fec(xd, aa)))
-  fecCI <- cbind(Mean = apply(fecMat, 2, mean), 
-                 "2.5%" = apply(fecMat, 2, quantile, 0.025),
-                 "97.5%" = apply(fecMat, 2, quantile, 0.975))
-  
-  if (nsim > 1) {
-    nthin <- length(keep)
-    idSims <- rep(1:nsim, each = nthin)
-    Means <- apply(parmat, 2, function(x) 
-      tapply(x, idSims, mean))
-    Vars <- apply(parmat, 2, function(x) 
-      tapply(x, idSims, var))
-    meanall <- apply(Means, 2, mean)
-    B <- nthin / (nsim - 1) * apply(t((t(Means) - meanall)^2), 2, sum)
-    W <- 1 / nsim * apply(Vars, 2, sum)
-    Varpl <- (nthin - 1) / nthin * W + 1 / nthin * B
-    Rhat <- sqrt(Varpl / W)
-    Rhat[Varpl==0] <- 1
-    conv <- cbind(B, W, Varpl, Rhat)
-    rownames(conv) <- colnames(parmat)
-    coeffs <- cbind(coeffs, conv[, 'Rhat'])
-    colnames(coeffs) <- c(colnames(coeffs)[-ncol(coeffs)], "PotScaleReduc")
-    idnconv <- which(conv[, 'Rhat'] > 1.1)
-    if (length(idnconv) == 0) {
-      # DIC:
-      Dave <- mean(- 2 * likePost[, 'likea'])
-      pD <- 1/2 * var(-2 * likePost[, 'likea'])
-      DIC <- pD + Dave
-      Dmode <- Dave - 2 * pD
-      k <- np
-      modSel <- c(Dave, Dmode, pD, k, DIC)
-      names(modSel) <- c("D.ave", "D.mode", "pD", "k", "DIC")
-      convmessage <- "All parameters converged properly.\n"
-    } else {
-      modSel <- NA
-      convmessage <- "Convergence not reached for some parameters.\n"
-    }
-  } else {
-    modSel <- NA
-    convmessage <- "Convergence not calculated due to\ninsuficcient number of simulations.\n"
-  }
-  
-  # Age of maximum fecundity:
-  xstart <- coeffs["b2", 1] / (2 * coeffs["b3", 1])
-  xstart <- coeffs["b2", 1] / (2 * coeffs["b3", 1])
-  xmvec <- t(apply(parmat, 1, CalcAgeMaxFec, fecmod = fecmod, xstart = xstart,
-                   minAge = minAge))
-  idnotkeep <- lapply(1:4, function(ii) {
-    pv <- parmat[, ii]
-    pci <- coeffs[ii, c("2.5%", "97.5%")]
-    idout <- which(pv < pci[1] | pv > pci[2])
-    return(idout)
-  })
-  
-  idnot <- unique(unlist(idnotkeep))
-  xmq <- t(apply(xmvec[-idnot, c(1, 2)], 2, function(xx) {
-    c(Mean = mean(xx, na.rm = TRUE), 
-      SE = sd(xx, na.rm = TRUE), 
-      quantile(xx, c(0.025, 0.975), na.rm = TRUE))}))
-  rownames(xmq) <- c("Age", "MaxFec")
-  
-  # Outputs:
-  outlist$coefficients <- coeffs
-  outlist$fecICs <- fecCI
-  outlist$modSel <- modSel
-  outlist$convergence <- conv
-  outlist$settings <- c(niter = niter, burnin = burnin,
-                        thinning = thinning, nsim = nsim, fecmod,
-                        np = np, randEffs)
-  outlist$avefec <- sapply(xd, function(xx) {
-    idx <- which(xii == xx)
-    ymean <- mean(yii[idx])
-    return(ymean)
-  })
-  outlist$maxFec <- xmq
-  outlist$jumpsd <- out[[1]]$jumps
-  names(outlist$jumpsd) <- colnames(parmat)[colnames(parmat) != "sigma"]
-  outlist$keep <- keep
-  outlist$parmat <- parmat
-  outlist$parmatfull <- parmatfull
-  outlist$likepost <- likePost
-  if (randEffs == 1) {
-    umat <- out[[1]]$umat[keep, ]
-    for (sim in 2:nsim) {
-      umat <- rbind(umat, out[[sim]]$umat[keep, ])
-    }
-    usumar <- cbind(Mean = apply(umat, 2, mean), 
-                    "2.5%" = apply(umat, 2, quantile, 0.025),
-                    "97.5%" = apply(umat, 2, quantile, 0.975))
-    outlist$randeff <- usumar
-  } else {
-    outlist$randeff <- NA
-  }
-  class(outlist) <- "baftaOut"
-  return(outlist)
+# ======================= #
+# ==== MCMC outputs: ====
+# ======================= #
+# Function to calculate convergence statistics 
+# based on Gelman et al. (2014).
+.CalcPSRF <- function(object, keep, nsim) {
+  nthin <- length(keep)
+  Means <- t(sapply(1:nsim, function(i) {
+    apply(object[[i]]$theta[keep, ], 2, mean)
+  }))
+  Vars <- t(sapply(1:nsim, function(i) {
+    apply(object[[i]]$theta, 2, var)
+  }))
+  meanall <- apply(Means, 2, mean)
+  B <- nthin / (nsim - 1) * apply(t((t(Means) - meanall)^2), 2, sum)
+  W <- 1 / nsim * apply(Vars, 2, sum)
+  Varpl <- (nthin - 1) / nthin * W + 1 / nthin * B
+  Rhat <- sqrt(Varpl / W)
+  Rhat[which(Varpl == 0)] <- 1
+  Rhat[which(Rhat < 1)] <- 1
+  conv <- cbind(B, W, Varpl, Rhat)
+  rownames(conv) <- colnames(Means)
+  return(conv)
 }
 
+# Calculate DIC:
+.CalcDIC <- function(likelihood, k) {
+  L <- length(likelihood)
+  Dm <- -2 * likelihood
+  Dave <- mean(Dm)
+  pD <- 1/2 * 1/(L-1) * sum((Dm - Dave)^2)
+  DIC <- Dave + pD
+  modSel <- c(Dave, pD, k, DIC)
+  names(modSel) <- c("D.ave", "pD", "k", "DIC")
+  return(modSel)
+}
+
+# Y predicted:
+.CalcYpred <- function(dataObj, ...) UseMethod(".CalcYpred")
+.CalcYpred.baftaAggr <- function(dataObj, thetaMat, uMat, FertFun, 
+                                 FertFun.numeric) {
+  x <- dataObj$x
+  
+  # Offset:
+  offs <- dataObj$data$nParents[dataObj$idages]
+  
+  # Ny:
+  ny <- length(dataObj$idages)
+  
+  # Calculate estimated fertility from parameter posteriors:
+  yPred <- t(apply(thetaMat, 1, function(be) {
+    fert <- FertFun(beta = be, x = x)
+    yp <- rpois(n = ny, lambda = offs * fert)
+    return(yp)
+  }))
+  
+  return(yPred)
+}
+
+.CalcYpred.baftaIndSimp <- function(dataObj, thetaMat, uMat, FertFun, 
+                                    FertFun.numeric) {
+  # Calculate estimated fertility from parameter posteriors:
+  nth <- nrow(thetaMat)
+  yPred <- t(sapply(1:nth, function(ith) {
+    the <- thetaMat[ith, ]
+    fert <-  FertFun(beta = the, x = dataObj$x) * 
+      exp(c(dataObj$rMat %*% uMat[ith, ]))
+    yp <- rpois(n = dataObj$n, lambda = fert)
+    return(yp)
+  }))
+  
+  return(yPred)
+}
+
+.CalcYpred.baftaIndExt <- function(dataObj, thetaMat, uMat, FertFun, 
+                                   FertFun.numeric) {
+  # Calculate estimated fertility from parameter posteriors:
+  nth <- nrow(thetaMat)
+  yPred <- t(sapply(1:nth, function(ith) {
+    the <- thetaMat[ith, ]
+    fert <-  FertFun(beta = the, x = dataObj$x) * 
+      exp(c(dataObj$rMat %*% uMat[ith, ]))
+    yp <- rpois(n = dataObj$n, lambda = fert)
+    return(yp)
+  }))
+  
+  return(yPred)
+}
+
+# Predictive loss:
+.CalcPredLoss <- function(dataObj, ...) UseMethod(".CalcPredLoss")
+.CalcPredLoss.baftaAggr <- function(dataObj, yPred) {
+  y1 <- apply(yPred, 2, mean, na.rm = TRUE)
+  y2 <- apply(yPred, 2, var, na.rm = TRUE)
+  gm <- sum((dataObj$data$nOffspring[dataObj$idages] - y1)^2)
+  pm <- sum(y2)
+  dev <- gm + pm
+  devMat <- matrix(c(gm, pm, dev), 1, 3,
+                   dimnames = list("", c("Good. Fit", "Penalty", "Deviance")))
+  return(devMat)
+}
+
+.CalcPredLoss.baftaIndSimp <- function(dataObj, yPred) {
+  y1 <- apply(yPred, 2, mean, na.rm = TRUE)
+  y2 <- apply(yPred, 2, var, na.rm = TRUE)
+  gm <- sum((dataObj$data$nOffspring - y1)^2)
+  pm <- sum(y2)
+  dev <- gm + pm
+  devMat <- matrix(c(gm, pm, dev), 1, 3,
+                   dimnames = list("", c("Good. Fit", "Penalty", "Deviance")))
+  return(devMat)
+}
+
+.CalcPredLoss.baftaIndExt <- function(dataObj, yPred) {
+  y1 <- apply(yPred, 2, mean, na.rm = TRUE)
+  y2 <- apply(yPred, 2, var, na.rm = TRUE)
+  gm <- sum((dataObj$data$nOffspring - y1)^2)
+  pm <- sum(y2)
+  dev <- gm + pm
+  devMat <- matrix(c(gm, pm, dev), 1, 3,
+                   dimnames = list("", c("Good. Fit", "Penalty", "Deviance")))
+  return(devMat)
+}
+
+# ============= #
+# ==== END ====
