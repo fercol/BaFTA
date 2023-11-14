@@ -1,0 +1,37 @@
+\name{lionFert}
+\alias{lionFert}
+\docType{data}
+\title{
+Aggregated age-specific fertility of African female lions
+}
+\description{
+Age specific fertility of African lions as reported by Packer \emph{et al.} (1998).
+}
+\usage{data("lionFert")}
+\format{
+  A data frame with 18 observations on the following 4 variables.
+  \describe{
+    \item{\code{Age}}{a numeric vector of discrete ages}
+    \item{\code{nParents}}{a numeric vector of the number of available parents of the given age}
+    \item{\code{nOffspring}}{a numerical vector of the number of offspring produced by parents of the given age}
+    \item{\code{Fertility}}{a numerical vector of the average age-specific fertility}
+  }
+}
+\details{
+The fertility data was digitized from Fig. 1d in Packer \emph{et al.} (1998), while the number of females (\dQuote{\code{nParents}}) was obtained from Fig. 1b. The number of offspring (\dQuote{\code{nOffspring}}) was calculated as \code{floor(nParents * Fertility)}.
+
+For inference on age-specific fertility on this data using package BaFTA, see Colchero (\emph{in prep.}).
+}
+\references{
+Colchero, F. (\emph{In prep.}) Inference on age-specific fertility in ecology and evolution. Learning from other disciplines and improving the state of the art. 
+
+Packer, C., Tatar, M. & Collins, A. (1998) Reproductive cessation in female mammals. \emph{Nature}, 392, 807-811.
+}
+\examples{
+# Load data:
+data("lionFert", package = "BaFTA")
+
+# First six rows:
+head(lionFert)
+}
+\keyword{datasets}

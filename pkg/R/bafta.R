@@ -1325,13 +1325,7 @@ plot.bafta <- function(x, type = "traces", ...) {
       mhRatio <- .CalcMHratio(parsNow = parsNow, parsNew = parsNew, 
                               jumpSD = jumpSD, parObj = parObj, ip = ip)
       postRatio <- exp(postNew - postNow + mhRatio)
-      # ========== #
-      # Debugging SEC 2b:
-      if (DEBUG & iter == 2) {
-        cat("Sec 2b\n", file = logFile, append = TRUE)
-      }
-      # ========== #
-      
+
       if (!is.na(postRatio)) {
         if (postRatio > runif(n = 1)) {
           parsNow <- parsNew
