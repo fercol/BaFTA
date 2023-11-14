@@ -11,7 +11,7 @@ importFrom("stats", "as.formula", "cor", "density", "dnorm", "formula",
            "model.matrix", "pnorm", "qnorm", "quantile", "rbeta",
            "rnorm", "runif", "sd", "terms", "var", "dpois", "ppois", "rpois",
            "qpois", "dexp", "pexp", "rexp", "qexp", "dgamma", "pgamma", 
-           "rgamma", "qgamma")
+           "rgamma", "qgamma", "dnbinom", "pnbinom", "qnbinom", "rnbinom")
 importFrom("utils", "packageDescription")
 
 # S3 methods for exported functions:
