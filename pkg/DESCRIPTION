@@ -1,12 +1,12 @@
 Package: BaFTA
 Type: Package
-Title: 
-Version: 
-Date: 2021-03-30
-Author: 
-Maintainer: 
-Depends: 
-Imports: 
-Description: 
+Title: Age-Specific Bayesian Fertility Trajectory Analysis from aggregated and individual level data
+Version: 1.0.0
+Date: 2023-09-05
+Author: Fernando Colchero
+Maintainer: Fernando Colchero <fernando_colchero@eva.mpg.de>
+Depends: R (>= 3.5.0), snowfall
+Description: Inference on age-specific fertility trajectories from aggregated and individual data under a Bayesian framework. Includes tools for data checking, model diagnostics, and plotting.
 License: GPL
+LazyLoad: yes
 LazyData: yes
