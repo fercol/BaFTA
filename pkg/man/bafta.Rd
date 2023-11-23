@@ -180,5 +180,5 @@ plot(out, type = "predictive")
 
 }
 
-\keyword{htest,models}
+\keyword{htest}
 
