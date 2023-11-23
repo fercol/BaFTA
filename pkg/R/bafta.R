@@ -11,7 +11,6 @@
 # ======================================== #
 # A) FUNCTIONS AVAILABLE TO THE USER: ==== 
 # ======================================== #
-
 # Main bafta function:
 bafta <- function(object, ...) UseMethod("bafta")
 
@@ -94,7 +93,8 @@ bafta.default <- function(object, dataType = "aggregated",
   # Verify if mean priors are specified:
   if ("thetaPriorMean" %in% argNames) {
     if (length(argList$thetaPriorMean) != parObj$p) {
-      stop(sprintf("Length of 'thetaPriorMean' argument should be %s.\n", parObj$p))
+      stop(sprintf("Length of 'thetaPriorMean' argument should be %s.\n", 
+                   parObj$p))
     } else {
       parObj$thetaPriorMean <- argList$thetaPriorMean
       names(parObj$thetaPriorMean) <- parObj$thetaName
@@ -135,23 +135,24 @@ bafta.default <- function(object, dataType = "aggregated",
   }
   
   # Variables to be loaded to the CPUS:
-  # cpuVars <- c(".rtnorm", ".dtnorm", ".qtnorm", ".CalcLikeFert", 
-  #              ".CalcLikeFert.baftaAggr", ".CalcLikeFert.baftaIndSimp",
-  #              ".CalcLikeFert.baftaIndExt", ".CalcPostTheta", 
-  #              ".CalcPostRandEffU", ".CalcPostRandEffV", ".CalcMHratio", 
-  #              ".SampleUSig", ".SampleVSig", "FertFun", 
-  #              "FertFun.numeric", "FertFun.matrix")
+  cpuVars <- c(".rtnorm", ".dtnorm", ".qtnorm", ".CalcLikeFert",
+               ".CalcLikeFert.baftaAggr", ".CalcLikeFert.baftaIndSimp",
+               ".CalcLikeFert.baftaIndExt", ".CalcPostTheta",
+               ".CalcPostRandEffU", ".CalcPostRandEffV", ".CalcMHratio",
+               ".SampleUSig", ".SampleVSig", "FertFun",
+               "FertFun.numeric", "FertFun.matrix")
 
   # Start parallel computing:
   sfInit(parallel = TRUE, cpus = ncpus)
   
   # Load BaFTA to CPUS:
-  sfLibrary("BaFTA", character.only = TRUE,
-            warn.conflicts = FALSE)
+  # sfLibrary("BaFTA", character.only = TRUE,
+  #           warn.conflicts = FALSE)
   # sfLibrary(BaFTA)
+  sfSource("pkg/R/bafta.R")
   
   # Load variables to CPUS:
-  # sfExport(list = cpuVars)
+  sfExport(list = cpuVars)
   
   # Run MCMC in parallel:
   outMCMC <- sfClusterApplyLB(1:nsim, .RunMCMC, dataObj = dataObj, 
@@ -257,6 +258,8 @@ bafta.default <- function(object, dataType = "aggregated",
   
   if (algObj$dataType == "aggregated") {
     aggrData <- object[which(object$Age >= dataObj$alpha), ]
+    dx <- diff(aggrData$Age[1:2])
+    aggrData$Age <- aggrData$Age + dx / 2
   } else {
     xag <- dataObj$alpha:ceiling(max(object$Age))
     nxag <- length(xag)
@@ -462,7 +465,7 @@ plot.bafta <- function(x, type = "traces", ...) {
     nsim <- x$settings$nsim
     ylim <- sapply(1:pSamp, function(ipar) {
       range(sapply(1:nsim, function(isim) {
-        range(x$runs[[isim]]$theta[, ipar], na.rm = TRUE)
+        range(x$runs[[isim]]$theta[, idSamp[ipar]], na.rm = TRUE)
       }), na.rm = TRUE)
     })
     if (grepl("indiv", x$settings$dataType)) {
@@ -490,8 +493,9 @@ plot.bafta <- function(x, type = "traces", ...) {
     colnames(ylim) <- pName
     par(mfrow = c(ceiling(pPars / 2), 2), mar = c(4, 4, 3, 1))
     for (ipar in idSamp) {
+      idp <- which(idSamp == ipar)
       plot(idkeep, x$runs[[1]]$theta[idkeep, ipar], type = 'l', 
-           ylim = ylim[, ipar], main = pName[ipar], xlab = "Iteration", 
+           ylim = ylim[, idp], main = pName[idp], xlab = "Iteration", 
            ylab = "Parameter")
       for (ic in 2:nsim) {
         lines(idkeep, x$runs[[ic]]$theta[idkeep, ipar], col = ic)
@@ -664,10 +668,10 @@ plot.bafta <- function(x, type = "traces", ...) {
     x <- object$Age[idages] - alpha
     
     # Adjust first age > 0 for certain models:
-    if (algObj$model %in% c("gamma", "beta", "gammaMixture", "Hadwiger", 
-                     "HadwigerMixture")) {
-      x[which(x == 0)] <- 0.005
-    }
+    # if (algObj$model %in% c("gamma", "beta", "gammaMixture", "Hadwiger", 
+    #                  "HadwigerMixture")) {
+    #   x[which(x == 0)] <- 0.005
+    # }
 
     # Create data object:
     do <- list(data = object, idages = idages, alpha = alpha, x = x,
@@ -789,8 +793,10 @@ plot.bafta <- function(x, type = "traces", ...) {
     nBe <- 5
     lowBe <- rep(0, 5)
     uppBe <- rep(Inf, 5)
-    startBe <- c(10, 1.5, 2.5, 0, dataObj$xMax)
-    priorMeanBe <- c(10, 1.5, 2.5, 0, dataObj$xMax)
+    xMax <- ceiling(dataObj$xMax)
+    if (algObj$dataType == "aggregated") xMax <- xMax + 1
+    startBe <- c(10, 1.5, 2.5, 0, xMax)
+    priorMeanBe <- c(10, 1.5, 2.5, 0, xMax)
     idSamp <- 1:3
   } else if (model == "skewNormal") {
     nBe <- 4
@@ -828,7 +834,7 @@ plot.bafta <- function(x, type = "traces", ...) {
     priorMeanBe <- c(5, 10, 20, 1, -0.5)
     idSamp <- 1:5
   }
-  priorSdBe <- rep(1, nBe)
+  priorSdBe <- rep(5, nBe)
   nameBe <- sprintf("b%s", 1:nBe - 1)
   names(startBe) <- nameBe
   defaultBeta  <- list(beta = startBe, priorMean = priorMeanBe, 
@@ -871,12 +877,12 @@ plot.bafta <- function(x, type = "traces", ...) {
     vPrior2 <- 0.1
     
   } else {
-    theta <- defBet$beta
-    thetaPriorMean <- defBet$priorMean
-    thetaPriorSD <- defBet$priorSD
-    thetaLower <- defBet$low
-    thetaUpper <- defBet$upp
-    idSamp <- defBet$idSamp
+    theta <- c(defBet$beta, alpha = 0.1)
+    thetaPriorMean <- c(defBet$priorMean, alpha = 1)
+    thetaPriorSD <- c(defBet$priorSD, alpha = 5)
+    thetaLower <- c(defBet$low, alpha = 0)
+    thetaUpper <- c(defBet$upp, alpha = Inf)
+    idSamp <- c(defBet$idSamp, defBet$p + 1)
   }
   parList <- list(thetaStart = theta, thetaPriorMean = thetaPriorMean, 
                   thetaPriorSD = thetaPriorSD, thetaLower = thetaLower,
@@ -1120,10 +1126,18 @@ plot.bafta <- function(x, type = "traces", ...) {
 
 .CalcLikeFert.baftaAggr <- function(dataObj, pars, FertFun, 
                                     FertFun.numeric) {
-  fert <- FertFun(beta = pars$theta, x = dataObj$x)
-  lk <- dpois(dataObj$data$nOffspring[dataObj$idages], 
-              lambda = dataObj$data$nParents[dataObj$idages] * fert, 
-              log = TRUE)
+  fert <- FertFun(beta = pars$theta, x = dataObj$x + 0.5)
+  # ----------------------------------- #
+  # Use negative binomial (2023-11-14):
+  
+  # lk <- dpois(dataObj$data$nOffspring[dataObj$idages], 
+  #             lambda = dataObj$data$nParents[dataObj$idages] * fert, 
+  #             log = TRUE)
+  rho <- pars$theta["alpha"] / (fert + pars$theta["alpha"])
+  lk <- dnbinom(x = dataObj$data$nOffspring[dataObj$idages],
+                size = dataObj$data$nParents[dataObj$idages] *
+                  pars$theta["alpha"], prob = rho, log = TRUE)
+  # ---------------------------------- #
   return(lk)
 }
 
@@ -1160,10 +1174,11 @@ plot.bafta <- function(x, type = "traces", ...) {
 
 # Metropolis-Hastings ratio:
 .CalcMHratio <- function(parsNow, parsNew, jumpSD, parObj, ip) {
-  MHr <- .dtnorm(parsNow$theta[ip], mean = parsNew$theta[ip], sd = jumpSD[ip],
+  idj <- which(parObj$idSamp == ip)
+  MHr <- .dtnorm(parsNow$theta[ip], mean = parsNew$theta[ip], sd = jumpSD[idj],
                 lower = parObj$thetaLower[ip], upper = parObj$thetaUpper[ip], 
                 log = TRUE) -
-    .dtnorm(parsNew$theta[ip], mean = parsNow$theta[ip], sd = jumpSD[ip],
+    .dtnorm(parsNew$theta[ip], mean = parsNow$theta[ip], sd = jumpSD[idj],
            lower = parObj$thetaLower[ip], upper = parObj$thetaUpper[ip], 
            log = TRUE)
   return(MHr)
@@ -1489,8 +1504,14 @@ plot.bafta <- function(x, type = "traces", ...) {
   
   # Calculate estimated fertility from parameter posteriors:
   yPred <- t(apply(thetaMat, 1, function(be) {
-    fert <- FertFun(beta = be, x = x)
-    yp <- rpois(n = ny, lambda = offs * fert)
+    fert <- FertFun(beta = be, x = x + 0.5)
+    # ------------------------------ #
+    # Negative binomial 2023-11-14:
+    rho <- be["alpha"] / (fert + be["alpha"])
+    yp <- rnbinom(n = ny, size = offs * be["alpha"], prob = rho)
+    # yp <- rnbinom(n = ny, size = offs, prob = rho)
+    # ------------------------------ #
+    # yp <- rpois(n = ny, lambda = offs * fert)
     return(yp)
   }))
   
