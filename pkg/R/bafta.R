@@ -1,7 +1,7 @@
 # ============================= CODE METADATA ================================ #
 # PACKAGE: BaFTA
 # AUTHOR: Fernando Colchero
-# DATE:
+# DATE CREATED: 2023-08-17
 # DESCRIPTION: Functions to estimate average age-specific fertility from
 #              alternative model with mixed effects for repeated individuals.
 # COMMENTS: dataType: aggregated ("aggregated"), individual seasonal 
@@ -1143,9 +1143,12 @@ plot.bafta <- function(x, type = "traces", ...) {
 
 .CalcLikeFert.baftaIndSimp <- function(dataObj, pars, FertFun, 
                                        FertFun.numeric) {
-  fert <- FertFun(beta = pars$theta, x = dataObj$x) * 
-    exp(c(dataObj$rMat %*% pars$u))
-  lk <- dpois(dataObj$data$nOffspring, lambda = fert, log = TRUE)
+  # fert <- FertFun(beta = pars$theta, x = dataObj$x) * 
+  #   exp(c(dataObj$rMat %*% pars$u))
+  # lk <- dpois(dataObj$data$nOffspring, lambda = fert, log = TRUE)
+  fert <- FertFun(beta = pars$theta, x = dataObj$x)
+  lk <- dnbinom(x = dataObj$data$nOffspring, size = pars$theta["alpha"],
+                )
   return(lk)
 }
 
