@@ -54,11 +54,12 @@ bafta.default <- function(object, dataType = "aggregated",
   }
   
   # Logical for random effects in fertility:
-  if (grepl("indiv", dataType)) {
-    RANDEFFU <- TRUE
-  } else {
-    RANDEFFU <- FALSE
-  }
+  # if (grepl("indiv", dataType)) {
+  #   RANDEFFU <- TRUE
+  # } else {
+  #   RANDEFFU <- FALSE
+  # }
+  RANDEFFU <- FALSE
   
   # Logical for random effects in IBI:
   if (dataType == "indivExtended") {
@@ -135,24 +136,24 @@ bafta.default <- function(object, dataType = "aggregated",
   }
   
   # Variables to be loaded to the CPUS:
-  cpuVars <- c(".rtnorm", ".dtnorm", ".qtnorm", ".CalcLikeFert",
-               ".CalcLikeFert.baftaAggr", ".CalcLikeFert.baftaIndSimp",
-               ".CalcLikeFert.baftaIndExt", ".CalcPostTheta",
-               ".CalcPostRandEffU", ".CalcPostRandEffV", ".CalcMHratio",
-               ".SampleUSig", ".SampleVSig", "FertFun",
-               "FertFun.numeric", "FertFun.matrix")
+  # cpuVars <- c(".rtnorm", ".dtnorm", ".qtnorm", ".CalcLikeFert",
+  #              ".CalcLikeFert.baftaAggr", ".CalcLikeFert.baftaIndSimp",
+  #              ".CalcLikeFert.baftaIndExt", ".CalcPostTheta",
+  #              ".CalcPostRandEffU", ".CalcPostRandEffV", ".CalcMHratio",
+  #              ".SampleUSig", ".SampleVSig", "FertFun",
+  #              "FertFun.numeric", "FertFun.matrix")
 
   # Start parallel computing:
   sfInit(parallel = TRUE, cpus = ncpus)
   
   # Load BaFTA to CPUS:
-  # sfLibrary("BaFTA", character.only = TRUE,
-  #           warn.conflicts = FALSE)
+  sfLibrary("BaFTA", character.only = TRUE,
+            warn.conflicts = FALSE)
   # sfLibrary(BaFTA)
-  sfSource("pkg/R/bafta.R")
+  # sfSource("pkg/R/bafta.R")
   
   # Load variables to CPUS:
-  sfExport(list = cpuVars)
+  # sfExport(list = cpuVars)
   
   # Run MCMC in parallel:
   outMCMC <- sfClusterApplyLB(1:nsim, .RunMCMC, dataObj = dataObj, 
@@ -525,10 +526,10 @@ plot.bafta <- function(x, type = "traces", ...) {
     pName <- x$params$thetaName[idSamp]
     parMat <- x$theta[, idSamp]
     if (grepl("indiv", x$settings$dataType)) {
-      parMat <- cbind(parMat, uSD = x$uSd)
-      idSamp <- c(idSamp, max(idSamp) + 1)
-      pSamp <- length(idSamp)
-      pName <- c(pName, "uSd")
+      # parMat <- cbind(parMat, uSD = x$uSd)
+      # idSamp <- c(idSamp, max(idSamp) + 1)
+      # pSamp <- length(idSamp)
+      # pName <- c(pName, "uSd")
       if (x$settings$dataType == "indivExtended") {
         parMat <- cbind(parMat, vSD = x$vSd)
         idSamp <- c(idSamp, max(idSamp) + 1)
@@ -666,6 +667,7 @@ plot.bafta <- function(x, type = "traces", ...) {
     alpha <- object$Age[which(object$Fertility > 0)[1]]
     idages <- which(object$Age >= alpha)
     x <- object$Age[idages] - alpha
+    dx <- diff(x[1:2])
     
     # Adjust first age > 0 for certain models:
     # if (algObj$model %in% c("gamma", "beta", "gammaMixture", "Hadwiger", 
@@ -675,7 +677,7 @@ plot.bafta <- function(x, type = "traces", ...) {
 
     # Create data object:
     do <- list(data = object, idages = idages, alpha = alpha, x = x,
-               xMax = max(x), n = n)
+               xMax = max(x), n = n, dx = dx)
     class(do) <- "baftaAggr"
   } else if (algObj$dataType == "indivSimple") {
     if (is.na(algObj$minAge)) {
@@ -684,6 +686,7 @@ plot.bafta <- function(x, type = "traces", ...) {
       alpha <- algObj$minAge
     }
     x <- object$Age - alpha
+    dx <- min(diff(sort(unique(x))))
     # Adjust first age > 0 for certain models:
     if (algObj$model %in% c("gamma", "beta", "gammaMixture", "Hadwiger", 
                             "HadwigerMixture")) {
@@ -701,7 +704,7 @@ plot.bafta <- function(x, type = "traces", ...) {
     rMat <- model.matrix(~ indID - 1, data = object)
     ni <- ncol(rMat)
     do <- list(data = object, x = x, y = y, rMat = rMat, ni = ni, 
-               xMax = max(x), n = n, alpha = alpha)
+               xMax = max(x), n = n, dx = dx, alpha = alpha)
     class(do) <- "baftaIndSimp"
   } else if (algObj$dataType == "indivExtended") {
     if (is.na(algObj$minAge)) {
@@ -856,34 +859,36 @@ plot.bafta <- function(x, type = "traces", ...) {
   
   # Basic beta parameters:
   defBet <- .SetDefaultBeta(algObj = algObj, dataObj = dataObj)
-  if (algObj$dataType %in% c("indivSimple", "indivExtended")) {
-    uSd <- 0.5
-    uPrior1 <- 0.01
-    uPrior2 <- 0.1
-  } 
+  # ---------------------------------- #
+  # Negative binomial instead of log-normal random effects
+  # if (algObj$dataType %in% c("indivSimple", "indivExtended")) {
+  #   uSd <- 0.5
+  #   uPrior1 <- 0.01
+  #   uPrior2 <- 0.1
+  # } 
+  theta <- c(defBet$beta, alpha = 0.1)
+  thetaPriorMean <- c(defBet$priorMean, alpha = 1)
+  thetaPriorSD <- c(defBet$priorSD, alpha = 5)
+  thetaLower <- c(defBet$low, alpha = 0)
+  thetaUpper <- c(defBet$upp, alpha = Inf)
+  idSamp <- c(defBet$idSamp, defBet$p + 1)
+  
   if (algObj$dataType == "indivExtended") {
     etaStart <- 1 / mean(dataObj$z[which(dataObj$data$First == 0)])
     gammaStart <- 1 / mean(dataObj$w[which(dataObj$data$First == 1)])
-    theta <- c(defBet$beta, eta = etaStart, gamma = gammaStart)
-    thetaPriorMean <- c(defBet$priorMean, eta = 1, gamma = 1)
-    thetaPriorSD <- c(defBet$priorSD, eta = 1, gamma = 1)
-    thetaLower <- c(defBet$low, 0, 0)
-    thetaUpper <- c(defBet$upp, Inf, Inf)
-    idSamp <- c(defBet$idSamp, defBet$p + c(1:2))
+    theta <- c(theta, eta = etaStart, gamma = gammaStart)
+    thetaPriorMean <- c(thetaPriorMean, eta = 1, gamma = 1)
+    thetaPriorSD <- c(thetaPriorSD, eta = 1, gamma = 1)
+    thetaLower <- c(thetaLower, 0, 0)
+    thetaUpper <- c(thetaUpper, Inf, Inf)
+    idSamp <- c(defBet$idSamp, defBet$p + c(1:3))
 
     # Random effects for IBI:
     vSd <- 0.5
     vPrior1 <- 0.01
     vPrior2 <- 0.1
     
-  } else {
-    theta <- c(defBet$beta, alpha = 0.1)
-    thetaPriorMean <- c(defBet$priorMean, alpha = 1)
-    thetaPriorSD <- c(defBet$priorSD, alpha = 5)
-    thetaLower <- c(defBet$low, alpha = 0)
-    thetaUpper <- c(defBet$upp, alpha = Inf)
-    idSamp <- c(defBet$idSamp, defBet$p + 1)
-  }
+  } 
   parList <- list(thetaStart = theta, thetaPriorMean = thetaPriorMean, 
                   thetaPriorSD = thetaPriorSD, thetaLower = thetaLower,
                   thetaUpper = thetaUpper, thetaName = names(theta),
@@ -1126,7 +1131,7 @@ plot.bafta <- function(x, type = "traces", ...) {
 
 .CalcLikeFert.baftaAggr <- function(dataObj, pars, FertFun, 
                                     FertFun.numeric) {
-  fert <- FertFun(beta = pars$theta, x = dataObj$x + 0.5)
+  fert <- FertFun(beta = pars$theta, x = dataObj$x + dataObj$dx / 2)
   # ----------------------------------- #
   # Use negative binomial (2023-11-14):
   
@@ -1146,18 +1151,28 @@ plot.bafta <- function(x, type = "traces", ...) {
   # fert <- FertFun(beta = pars$theta, x = dataObj$x) * 
   #   exp(c(dataObj$rMat %*% pars$u))
   # lk <- dpois(dataObj$data$nOffspring, lambda = fert, log = TRUE)
-  fert <- FertFun(beta = pars$theta, x = dataObj$x)
+  # ----------------------------------- #
+  # Use negative binomial (2023-12-11):
+  fert <- FertFun(beta = pars$theta, x = dataObj$x + dataObj$dx / 2)
+  rho <- pars$theta["alpha"] / (fert + pars$theta["alpha"])
   lk <- dnbinom(x = dataObj$data$nOffspring, size = pars$theta["alpha"],
-                )
+                size = pars$theta["alpha"], prob = rho, log = TRUE)
+  # ---------------------------------- #
   return(lk)
 }
 
 # Likelihood function:
 .CalcLikeFert.baftaIndExt <- function(dataObj, pars, FertFun, 
                                       FertFun.numeric) {
-  fert <- FertFun(beta = pars$theta, x = dataObj$x) * 
-    exp(c(dataObj$rMat %*% pars$u))
-  lk <- dpois(dataObj$data$nOffspring, lambda = fert, log = TRUE) +
+  # fert <- FertFun(beta = pars$theta, x = dataObj$x) * 
+  #   exp(c(dataObj$rMat %*% pars$u))
+  # lk <- dpois(dataObj$data$nOffspring, lambda = fert, log = TRUE) +
+  # ----------------------------------- #
+  # Use negative binomial (2023-12-11):
+  fert <- FertFun(beta = pars$theta, x = dataObj$x)
+  rho <- pars$theta["alpha"] / (fert + pars$theta["alpha"])
+  lk <- dnbinom(x = dataObj$data$nOffspring, size = pars$theta["alpha"],
+                prob = rho, log = TRUE) +
     dexp(dataObj$z, rate = pars$theta["eta"] * 
            exp(c(dataObj$rMat %*% pars$v)), log = TRUE) * 
     (1 - dataObj$data$First) +
@@ -1242,13 +1257,14 @@ plot.bafta <- function(x, type = "traces", ...) {
   parsNow <- list(theta = parObj$thetaStart)
   
   # Fertility random effects parameter:
-  if (grepl("indiv", algObj$dataType)) {
-    RANDEFFU <- TRUE
-    parsNow$u <- rep(0, dataObj$ni)
-    parsNow$uSd <- 1
-  } else {
-    RANDEFFU <- FALSE
-  }
+  # if (grepl("indiv", algObj$dataType)) {
+  #   RANDEFFU <- TRUE
+  #   parsNow$u <- rep(0, dataObj$ni)
+  #   parsNow$uSd <- 1
+  # } else {
+  #   RANDEFFU <- FALSE
+  # }
+  RANDEFFU <- FALSE
   
   # IBI random effects parameter:
   if (algObj$dataType == "indivExtended") {
@@ -1269,12 +1285,13 @@ plot.bafta <- function(x, type = "traces", ...) {
   }
   
   # Calculate likelihood and posteriors:
-  likeNow <- .CalcLikeFert(dataObj = dataObj, pars = parsNow, FertFun = FertFun, 
+  likeNow <- .CalcLikeFert(dataObj = dataObj, pars = parsNow, 
+                           FertFun = FertFun, 
                            FertFun.numeric = FertFun.numeric)
   postNow <- .CalcPostTheta(pars = parsNow, like = likeNow, 
                             parObj = parObj)
   if (RANDEFFU) {
-    postUNow <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNow, 
+    postUNow <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNow,
                                  like = likeNow)
   }
   
@@ -1327,6 +1344,7 @@ plot.bafta <- function(x, type = "traces", ...) {
     
   }
   
+  
   for (iter in 2:niter) {
     for (ip in parObj$idSamp) {
       idj <- which(parObj$idSamp == ip)
@@ -1354,38 +1372,39 @@ plot.bafta <- function(x, type = "traces", ...) {
       }
     }
     
-    # Random effects:
+    # Random effects fertility:
+    
     if (RANDEFFU & iter / 2 == floor(iter / 2)) {
-      postUNow <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNow, 
+      postUNow <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNow,
                                     like = likeNow)
       # Sample U values:
       parsNew <- parsNow
       parsNew$u <- rnorm(n = dataObj$ni, mean = parsNow$u, sd = 0.1)
-      likeNew <- .CalcLikeFert(dataObj = dataObj, pars = parsNew, 
-                               FertFun = FertFun, 
+      likeNew <- .CalcLikeFert(dataObj = dataObj, pars = parsNew,
+                               FertFun = FertFun,
                                FertFun.numeric = FertFun.numeric)
-      postUNew <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNew, 
+      postUNew <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNew,
                                     like = likeNew)
       acceptRatio <- exp(postUNew - postUNow)
       ranU <- runif(dataObj$ni)
       idUpd <- which(acceptRatio > ranU)
       parsNow$u[idUpd] <- parsNew$u[idUpd]
       postUNow[idUpd] <- postUNew[idUpd]
-      likeNow <- .CalcLikeFert(dataObj = dataObj, pars = parsNow, 
-                               FertFun = FertFun, 
+      likeNow <- .CalcLikeFert(dataObj = dataObj, pars = parsNow,
+                               FertFun = FertFun,
                                FertFun.numeric = FertFun.numeric)
-      postNow <- .CalcPostTheta(pars = parsNow, like = likeNow, 
+      postNow <- .CalcPostTheta(pars = parsNow, like = likeNow,
                                 parObj = parObj)
-      
+
       # Sample sigma:
-      parsNow$uSd <- .SampleUSig(dataObj = dataObj, pars = parsNow, 
+      parsNow$uSd <- .SampleUSig(dataObj = dataObj, pars = parsNow,
                                  parObj = parObj)
-      postUNow <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNow, 
+      postUNow <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNow,
                                     like = likeNow)
-      
-    } 
+
+    }
     
-    # Random effects:
+    # Random effects IBI:
     if (RANDEFFV & iter / 2 == floor(iter / 2)) {
       postVNow <- .CalcPostRandEffV(dataObj = dataObj, pars = parsNow, 
                                     like = likeNow)
@@ -1408,8 +1427,11 @@ plot.bafta <- function(x, type = "traces", ...) {
                                FertFun.numeric = FertFun.numeric)
       postNow <- .CalcPostTheta(pars = parsNow, like = likeNow, 
                                 parObj = parObj)
-      postUNow <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNow, 
-                                    like = likeNow)
+      if (RANDEFFU) {
+        postUNow <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNow, 
+                                      like = likeNow)
+        
+      }
       
       # Sample sigma:
       parsNow$vSd <- .SampleVSig(dataObj = dataObj, pars = parsNow, 
@@ -1450,9 +1472,8 @@ plot.bafta <- function(x, type = "traces", ...) {
     jumpOut <- NA
   }
   outList <- list(theta = parOut, likePost = likePostOut, u = uOut,
-                  uSd = uSdOut, v = vOut, vSd = vSdOut, jumps = jumpSdFin, 
+                  uSd = uSdOut, v = vOut, vSd = vSdOut, jumps = jumpSdFin,
                   jumpMat = jumpOut)
-  
   return(outList)
 }
 
@@ -1512,7 +1533,6 @@ plot.bafta <- function(x, type = "traces", ...) {
     # Negative binomial 2023-11-14:
     rho <- be["alpha"] / (fert + be["alpha"])
     yp <- rnbinom(n = ny, size = offs * be["alpha"], prob = rho)
-    # yp <- rnbinom(n = ny, size = offs, prob = rho)
     # ------------------------------ #
     # yp <- rpois(n = ny, lambda = offs * fert)
     return(yp)
@@ -1527,9 +1547,16 @@ plot.bafta <- function(x, type = "traces", ...) {
   nth <- nrow(thetaMat)
   yPred <- t(sapply(1:nth, function(ith) {
     the <- thetaMat[ith, ]
-    fert <-  FertFun(beta = the, x = dataObj$x) * 
-      exp(c(dataObj$rMat %*% uMat[ith, ]))
-    yp <- rpois(n = dataObj$n, lambda = fert)
+    # fert <-  FertFun(beta = the, x = dataObj$x) * 
+    #   exp(c(dataObj$rMat %*% uMat[ith, ]))
+    # yp <- rpois(n = dataObj$n, lambda = fert)
+    # ------------------------------ #
+    # Negative binomial 2023-11-14:
+    fert <-  FertFun(beta = the, x = dataObj$x)
+    rho <- be["alpha"] / (fert + be["alpha"])
+    yp <- rnbinom(n = dataObj$n, size = be["alpha"], prob = rho)
+    # ------------------------------ #
+    
     return(yp)
   }))
   
@@ -1542,9 +1569,16 @@ plot.bafta <- function(x, type = "traces", ...) {
   nth <- nrow(thetaMat)
   yPred <- t(sapply(1:nth, function(ith) {
     the <- thetaMat[ith, ]
-    fert <-  FertFun(beta = the, x = dataObj$x) * 
-      exp(c(dataObj$rMat %*% uMat[ith, ]))
-    yp <- rpois(n = dataObj$n, lambda = fert)
+    # fert <-  FertFun(beta = the, x = dataObj$x) * 
+    #   exp(c(dataObj$rMat %*% uMat[ith, ]))
+    # yp <- rpois(n = dataObj$n, lambda = fert)
+    # ------------------------------ #
+    # Negative binomial 2023-11-14:
+    fert <-  FertFun(beta = the, x = dataObj$x)
+    rho <- the["alpha"] / (fert + the["alpha"])
+    yp <- rnbinom(n = dataObj$n, size = the["alpha"], prob = rho)
+    # ------------------------------ #
+    
     return(yp)
   }))
   
