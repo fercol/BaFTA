@@ -161,7 +161,8 @@ data("lionFert", package = "BaFTA")
 
 # Run quadratic model:
 out <- bafta(object = lionFert, model = "quadratic", 
-                dataType = "aggregated", nsim = 4, ncpus = 4)
+                dataType = "aggregated", nsim = 2, ncpus = 2, 
+                niter = 1000, burnin = 101)
 
 # Print results to the console:
 out
