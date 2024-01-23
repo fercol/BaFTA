@@ -22,8 +22,8 @@ bafta.default <- function(object, dataType = "aggregated",
   argList <- list(...)
   argNames <- names(argList)
   
-  # Start timer:
-  Start <- Sys.time()
+  # BaFTAstart timer:
+  BaFTAstart <- Sys.time()
   
   # Fertility models:
   models <- c("quadratic", "PeristeraKostaki", "ColcheroMuller", 
@@ -143,7 +143,7 @@ bafta.default <- function(object, dataType = "aggregated",
   #              ".SampleUSig", ".SampleVSig", "FertFun",
   #              "FertFun.numeric", "FertFun.matrix")
 
-  # Start parallel computing:
+  # BaFTAstart parallel computing:
   sfInit(parallel = TRUE, cpus = ncpus)
   
   # Load BaFTA to CPUS:
@@ -328,8 +328,8 @@ bafta.default <- function(object, dataType = "aggregated",
   }
   
   # end timer:
-  End <- Sys.time()
-  compTime <- sprintf("%s mins", signif(as.numeric(End - Start, 
+  BaFTAend <- Sys.time()
+  compTime <- sprintf("%s mins", signif(as.numeric(BaFTAend - BaFTAstart, 
                                                    units = "mins"), 2))
   
   # Settings:
@@ -469,19 +469,20 @@ plot.bafta <- function(x, type = "traces", ...) {
         range(x$runs[[isim]]$theta[, idSamp[ipar]], na.rm = TRUE)
       }), na.rm = TRUE)
     })
+    pPars <- pSamp
     if (grepl("indiv", x$settings$dataType)) {
-      uyl <- range(sapply(1:nsim, function(isim) {
-        range(x$runs[[isim]]$uSd)
-      }))
-      ylim <- cbind(ylim, uyl)
-      pPars <- pSamp + 1
-      pName <- c(pName, "uSd")
+      # uyl <- range(sapply(1:nsim, function(isim) {
+      #   range(x$runs[[isim]]$uSd)
+      # }))
+      # ylim <- cbind(ylim, uyl)
+      # pPars <- pSamp + 1
+      # pName <- c(pName, "uSd")
       if (x$settings$dataType == "indivExtended") {
         vyl <- range(sapply(1:nsim, function(isim) {
           range(x$runs[[isim]]$vSd)
         }))
         ylim <- cbind(ylim, vyl)
-        pPars <- pPars + 1
+        pPars <- pSamp + 1
         pName <- c(pName, "vSd")
       }
     } else {
@@ -503,12 +504,12 @@ plot.bafta <- function(x, type = "traces", ...) {
       }
     }
     if (grepl("indiv", x$settings$dataType)) {
-      plot(idkeep, x$runs[[1]]$uSd[idkeep], type = 'l',
-           ylim = ylim[, ncol(ylim)], xlab = "Iteration", ylab = "Parameter",
-           main = "uSd")
-      for (ic in 2:nsim) {
-        lines(idkeep, x$runs[[ic]]$uSd[idkeep], col = ic)
-      }
+      # plot(idkeep, x$runs[[1]]$uSd[idkeep], type = 'l',
+      #      ylim = ylim[, ncol(ylim)], xlab = "Iteration", ylab = "Parameter",
+      #      main = "uSd")
+      # for (ic in 2:nsim) {
+      #   lines(idkeep, x$runs[[ic]]$uSd[idkeep], col = ic)
+      # }
       if (x$settings$dataType == "indivExtended") {
         plot(idkeep, x$runs[[1]]$vSd[idkeep], type = 'l',
              ylim = ylim[, ncol(ylim)], xlab = "Iteration", ylab = "Parameter",
@@ -617,6 +618,10 @@ plot.bafta <- function(x, type = "traces", ...) {
   } else if (type == "predictive") {
     dat <- x$aggrData
     predQuant <- x$pred
+    idna <- which(is.na(predQuant[, 1]))
+    if (length(idna) > 0) {
+      for (ina in idna) predQuant[ina, ] <- 0
+    }
     alpha <- x$data$alpha
     ylim <- c(0, max(c(dat$nOffspring, predQuant[, "Upper"]), 
                      na.rm = TRUE))
@@ -663,9 +668,9 @@ plot.bafta <- function(x, type = "traces", ...) {
   # Aggretated data:
   if (algObj$dataType == "aggregated") {
     # Extract ages:
-    idages <- which(object$Fertility > 0)
     alpha <- object$Age[which(object$Fertility > 0)[1]]
-    idages <- which(object$Age >= alpha)
+    idages <- which(object$Age >= alpha & object$nParents > 0)
+    idpar <- which(object$nParents[which(object$Age >= alpha)] > 0)
     x <- object$Age[idages] - alpha
     dx <- diff(x[1:2])
     
@@ -677,7 +682,7 @@ plot.bafta <- function(x, type = "traces", ...) {
 
     # Create data object:
     do <- list(data = object, idages = idages, alpha = alpha, x = x,
-               xMax = max(x), n = n, dx = dx)
+               xMax = max(x), n = n, dx = dx, idpar = idpar)
     class(do) <- "baftaAggr"
   } else if (algObj$dataType == "indivSimple") {
     if (is.na(algObj$minAge)) {
@@ -1155,7 +1160,7 @@ plot.bafta <- function(x, type = "traces", ...) {
   # Use negative binomial (2023-12-11):
   fert <- FertFun(beta = pars$theta, x = dataObj$x + dataObj$dx / 2)
   rho <- pars$theta["alpha"] / (fert + pars$theta["alpha"])
-  lk <- dnbinom(x = dataObj$data$nOffspring, size = pars$theta["alpha"],
+  lk <- dnbinom(x = dataObj$data$nOffspring, 
                 size = pars$theta["alpha"], prob = rho, log = TRUE)
   # ---------------------------------- #
   return(lk)
@@ -1275,13 +1280,37 @@ plot.bafta <- function(x, type = "traces", ...) {
     RANDEFFV <- FALSE
   }
   
+  # Calculate likelihood and posteriors:
+  likeNow <- .CalcLikeFert(dataObj = dataObj, pars = parsNow, 
+                           FertFun = FertFun, 
+                           FertFun.numeric = FertFun.numeric)
+  postNow <- .CalcPostTheta(pars = parsNow, like = likeNow, 
+                            parObj = parObj)
+  if (is.na(postNow) | postNow == -Inf | postNow == Inf) {
+    postNA <- TRUE
+  } else {
+    postNA <- FALSE
+  }
+  
   # Jitter parameters:
-  if (sim > 1) {
+  while(postNA) {
     parsNow$theta[parObj$idSamp] <- 
       .rtnorm(n = 1, mean = parObj$thetaStart[parObj$idSamp], 
               sd = rep(0.1, length(parObj$idSamp)), 
               lower = parObj$thetaLower[parObj$idSamp],
               upper = parObj$thetaUpper[parObj$idSamp])
+    
+    # Calculate likelihood and posteriors:
+    likeNow <- .CalcLikeFert(dataObj = dataObj, pars = parsNow, 
+                             FertFun = FertFun, 
+                             FertFun.numeric = FertFun.numeric)
+    postNow <- .CalcPostTheta(pars = parsNow, like = likeNow, 
+                              parObj = parObj)
+    if (is.na(postNow) | postNow == -Inf | postNow == Inf) {
+      postNA <- TRUE
+    } else {
+      postNA <- FALSE
+    }
   }
   
   # Calculate likelihood and posteriors:
@@ -1521,10 +1550,13 @@ plot.bafta <- function(x, type = "traces", ...) {
   x <- dataObj$x
   
   # Offset:
-  offs <- dataObj$data$nParents[dataObj$idages]
+  nx <- dataObj$data$nParents[dataObj$idages]
   
   # Ny:
   ny <- length(dataObj$idages)
+  
+  # Total adult ages:
+  nytot <- length(which(dataObj$data$Age >= dataObj$alpha))
   
   # Calculate estimated fertility from parameter posteriors:
   yPred <- t(apply(thetaMat, 1, function(be) {
@@ -1532,9 +1564,10 @@ plot.bafta <- function(x, type = "traces", ...) {
     # ------------------------------ #
     # Negative binomial 2023-11-14:
     rho <- be["alpha"] / (fert + be["alpha"])
-    yp <- rnbinom(n = ny, size = offs * be["alpha"], prob = rho)
+    yp <- rep(NA, nytot)
+    yp[dataObj$idpar] <- rnbinom(n = ny, size = nx * be["alpha"], prob = rho)
     # ------------------------------ #
-    # yp <- rpois(n = ny, lambda = offs * fert)
+    # yp <- rpois(n = ny, lambda = nx * fert)
     return(yp)
   }))
   
@@ -1545,14 +1578,14 @@ plot.bafta <- function(x, type = "traces", ...) {
                                     FertFun.numeric) {
   # Calculate estimated fertility from parameter posteriors:
   nth <- nrow(thetaMat)
-  yPred <- t(sapply(1:nth, function(ith) {
-    the <- thetaMat[ith, ]
+  yPred <- t(apply(thetaMat, 1, function(be) {
+    # be <- thetaMat[ith, ]
     # fert <-  FertFun(beta = the, x = dataObj$x) * 
     #   exp(c(dataObj$rMat %*% uMat[ith, ]))
     # yp <- rpois(n = dataObj$n, lambda = fert)
     # ------------------------------ #
     # Negative binomial 2023-11-14:
-    fert <-  FertFun(beta = the, x = dataObj$x)
+    fert <-  FertFun(beta = be, x = dataObj$x)
     rho <- be["alpha"] / (fert + be["alpha"])
     yp <- rnbinom(n = dataObj$n, size = be["alpha"], prob = rho)
     # ------------------------------ #
@@ -1567,16 +1600,15 @@ plot.bafta <- function(x, type = "traces", ...) {
                                    FertFun.numeric) {
   # Calculate estimated fertility from parameter posteriors:
   nth <- nrow(thetaMat)
-  yPred <- t(sapply(1:nth, function(ith) {
-    the <- thetaMat[ith, ]
+  yPred <- t(apply(thetaMat, 1, function(be) {
     # fert <-  FertFun(beta = the, x = dataObj$x) * 
     #   exp(c(dataObj$rMat %*% uMat[ith, ]))
     # yp <- rpois(n = dataObj$n, lambda = fert)
     # ------------------------------ #
     # Negative binomial 2023-11-14:
-    fert <-  FertFun(beta = the, x = dataObj$x)
-    rho <- the["alpha"] / (fert + the["alpha"])
-    yp <- rnbinom(n = dataObj$n, size = the["alpha"], prob = rho)
+    fert <-  FertFun(beta = be, x = dataObj$x)
+    rho <- be["alpha"] / (fert + be["alpha"])
+    yp <- rnbinom(n = dataObj$n, size = be["alpha"], prob = rho)
     # ------------------------------ #
     
     return(yp)
@@ -1588,8 +1620,8 @@ plot.bafta <- function(x, type = "traces", ...) {
 # Predictive loss:
 .CalcPredLoss <- function(dataObj, ...) UseMethod(".CalcPredLoss")
 .CalcPredLoss.baftaAggr <- function(dataObj, yPred) {
-  y1 <- apply(yPred, 2, mean, na.rm = TRUE)
-  y2 <- apply(yPred, 2, var, na.rm = TRUE)
+  y1 <- apply(yPred[, dataObj$idpar], 2, mean, na.rm = TRUE)
+  y2 <- apply(yPred[, dataObj$idpar], 2, var, na.rm = TRUE)
   gm <- sum((dataObj$data$nOffspring[dataObj$idages] - y1)^2)
   pm <- sum(y2)
   dev <- gm + pm
