@@ -1,11 +1,11 @@
 # BaFTA: Bayesian Fertility Trajectory Analysis (Beta).
 
-`BaSTA` is an R package for parametric Bayesian estimation of age-specific fertility for aggregated and invidiual level data.
+`BaSTA` is an R package for parametric Bayesian estimation of age-specific fertility for aggregated and individual level data.
 
 ## What's in BaFTA?
 
-- Ability to analyze aggregated or individual level data;
-- Testing different models of age-specific fertility and compared their performance by means of DICs or posterior predictive checks;
+- Ability to analyze aggregated or individual level data for seasonal or continuous breeding with variable inter-birth intervals;
+- Testing different models of age-specific fertility and compared their performance by means of DIC or posterior predictive check;
 - Plots of traces to visually inspect convergence, of parameter posterior densities, of predicted age-specific fertility, and predictive plots for goodness of fit;
 
 ## How to install BaFTA?
