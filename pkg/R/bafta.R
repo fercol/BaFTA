@@ -136,12 +136,12 @@ bafta.default <- function(object, dataType = "aggregated",
   }
   
   # Variables to be loaded to the CPUS:
-  # cpuVars <- c(".rtnorm", ".dtnorm", ".qtnorm", ".CalcLikeFert",
-  #              ".CalcLikeFert.baftaAggr", ".CalcLikeFert.baftaIndSimp",
-  #              ".CalcLikeFert.baftaIndExt", ".CalcPostTheta",
-  #              ".CalcPostRandEffU", ".CalcPostRandEffV", ".CalcMHratio",
-  #              ".SampleUSig", ".SampleVSig", "FertFun",
-  #              "FertFun.numeric", "FertFun.matrix")
+  cpuVars <- c(".rtnorm", ".dtnorm", ".qtnorm", ".CalcLikeFert",
+               ".CalcLikeFert.baftaAggr", ".CalcLikeFert.baftaIndSimp",
+               ".CalcLikeFert.baftaIndExt", ".CalcPostTheta",
+               ".CalcPostRandEffU", ".CalcPostRandEffV", ".CalcMHratio",
+               ".SampleUSig", ".SampleVSig", "FertFun",
+               "FertFun.numeric", "FertFun.matrix")
 
   # BaFTAstart parallel computing:
   sfInit(parallel = TRUE, cpus = ncpus)
@@ -153,7 +153,7 @@ bafta.default <- function(object, dataType = "aggregated",
   # sfSource("pkg/R/bafta.R")
   
   # Load variables to CPUS:
-  # sfExport(list = cpuVars)
+  sfExport(list = cpuVars)
   
   # Run MCMC in parallel:
   outMCMC <- sfClusterApplyLB(1:nsim, .RunMCMC, dataObj = dataObj, 
@@ -202,7 +202,7 @@ bafta.default <- function(object, dataType = "aggregated",
   Conv <- .CalcPSRF(object = outMCMC, keep = keep, nsim = ncpus)
   
   # Effective sample size:
-  Neff <- CalcNeff(object = outMCMC, keep = keep, nsim = ncpus, Rhat = Rhat)
+  Neff <- .CalcNeff(object = outMCMC, keep = keep, nsim = ncpus, Rhat = Conv)
   
   # Extract average parameters:
   coeffs <- cbind(Mean = apply(thetaMat[, parObj$idSamp],  2, mean), 
@@ -216,6 +216,7 @@ bafta.default <- function(object, dataType = "aggregated",
     coeffs <- rbind(coeffs, uSd = c(Mean = mean(uSdVec), SD = sd(uSdVec),
                                     Lower = quantile(uSdVec, 0.025),
                                     Upper = quantile(uSdVec, 0.975),
+                                    Neff = length(keep),
                                     Rhat = 1))
     # Merge thetaMat with uSd:
     # thetaMat <- cbind(thetaMat, uSD = uSdVec)
@@ -234,6 +235,7 @@ bafta.default <- function(object, dataType = "aggregated",
     coeffs <- rbind(coeffs, vSd = c(Mean = mean(vSdVec), SD = sd(vSdVec),
                                     Lower = quantile(vSdVec, 0.025),
                                     Upper = quantile(vSdVec, 0.975),
+                                    Neff = length(keep),
                                     Rhat = 1))
     # Merge thetaMat with uSd:
     # thetaMat <- cbind(thetaMat, uSD = uSdVec)
@@ -1535,15 +1537,16 @@ plot.bafta <- function(x, type = "traces", ...) {
 }
 
 # Calculate effective sample size:
-CalcNeff <- function(object, keep, nsim, Rhat) {
+.CalcNeff <- function(object, keep, nsim, Rhat) {
   nthin <- length(keep)
   Varpl <- Rhat[, "Varpl"]
   Tlags <- 200
-  rhoHat <- matrix(NA, nrow = Tlags, ncol = p)
+  nTheta <- ncol(object[[1]]$theta)
+  rhoHat <- matrix(NA, nrow = Tlags, ncol = nTheta)
   for (tt in 1:Tlags) {
     Vt <- 1 / (nsim * (nthin - tt)) * 
       apply(sapply(1:nsim, function(im) {
-        bMat <- object[[im]]$theta[keep,, im]
+        bMat <- object[[im]]$theta[keep, ]
         apply(bMat, 2, function(bi) {
           sum((bi[1:(nthin - tt + 1)] - bi[tt:nthin])^2)
         })
@@ -1556,7 +1559,7 @@ CalcNeff <- function(object, keep, nsim, Rhat) {
     which(rhoi[-1] + rhoi[-Tlags] < 0)[1]
   })
   
-  neff <- floor(sapply(1:p, function(ip) {
+  neff <- floor(sapply(1:nTheta, function(ip) {
     nsim * nthin / (1 + 2 * sum(rhoHat[1:Tthresh[ip], ip]))
   }))
   names(neff) <- rownames(Rhat)
