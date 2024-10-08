@@ -216,7 +216,7 @@ bafta.default <- function(object, dataType = "aggregated",
     coeffs <- rbind(coeffs, uSd = c(Mean = mean(uSdVec), SD = sd(uSdVec),
                                     Lower = quantile(uSdVec, 0.025),
                                     Upper = quantile(uSdVec, 0.975),
-                                    Neff = length(keep),
+                                    Neff = length(keep) * nsim,
                                     Rhat = 1))
     # Merge thetaMat with uSd:
     # thetaMat <- cbind(thetaMat, uSD = uSdVec)
@@ -235,7 +235,7 @@ bafta.default <- function(object, dataType = "aggregated",
     coeffs <- rbind(coeffs, vSd = c(Mean = mean(vSdVec), SD = sd(vSdVec),
                                     Lower = quantile(vSdVec, 0.025),
                                     Upper = quantile(vSdVec, 0.975),
-                                    Neff = length(keep),
+                                    Neff = length(keep) * nsim,
                                     Rhat = 1))
     # Merge thetaMat with uSd:
     # thetaMat <- cbind(thetaMat, uSD = uSdVec)
