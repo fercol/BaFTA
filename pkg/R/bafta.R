@@ -136,12 +136,12 @@ bafta.default <- function(object, dataType = "aggregated",
   }
   
   # Variables to be loaded to the CPUS:
-  cpuVars <- c(".rtnorm", ".dtnorm", ".qtnorm", ".CalcLikeFert",
-               ".CalcLikeFert.baftaAggr", ".CalcLikeFert.baftaIndSimp",
-               ".CalcLikeFert.baftaIndExt", ".CalcPostTheta",
-               ".CalcPostRandEffU", ".CalcPostRandEffV", ".CalcMHratio",
-               ".SampleUSig", ".SampleVSig", "FertFun",
-               "FertFun.numeric", "FertFun.matrix")
+  # cpuVars <- c(".rtnorm", ".dtnorm", ".qtnorm", ".CalcLikeFert",
+  #              ".CalcLikeFert.baftaAggr", ".CalcLikeFert.baftaIndSimp",
+  #              ".CalcLikeFert.baftaIndExt", ".CalcPostTheta",
+  #              ".CalcPostRandEffU", ".CalcPostRandEffV", ".CalcMHratio",
+  #              ".SampleUSig", ".SampleVSig", "FertFun",
+  #              "FertFun.numeric", "FertFun.matrix")
 
   # BaFTAstart parallel computing:
   sfInit(parallel = TRUE, cpus = ncpus)
@@ -153,7 +153,7 @@ bafta.default <- function(object, dataType = "aggregated",
   # sfSource("pkg/R/bafta.R")
   
   # Load variables to CPUS:
-  sfExport(list = cpuVars)
+  # sfExport(list = cpuVars)
   
   # Run MCMC in parallel:
   outMCMC <- sfClusterApplyLB(1:nsim, .RunMCMC, dataObj = dataObj, 
