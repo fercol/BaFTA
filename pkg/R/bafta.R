@@ -201,12 +201,15 @@ bafta.default <- function(object, dataType = "aggregated",
   # Calculate convergence statistics:
   Conv <- .CalcPSRF(object = outMCMC, keep = keep, nsim = ncpus)
   
+  # Effective sample size:
+  Neff <- CalcNeff(object = outMCMC, keep = keep, nsim = ncpus, Rhat = Rhat)
+  
   # Extract average parameters:
   coeffs <- cbind(Mean = apply(thetaMat[, parObj$idSamp],  2, mean), 
                   SD = apply(thetaMat[, parObj$idSamp], 2, sd),
                   Lower = apply(thetaMat[, parObj$idSamp], 2, quantile, 0.025),
                   Upper = apply(thetaMat[, parObj$idSamp], 2, quantile, 0.975),
-                  Rhat = Conv[parObj$idSamp, "Rhat"])
+                  Neff = Neff, Rhat = Conv[parObj$idSamp, "Rhat"])
   
   if (RANDEFFU) {
     # Include random effect standard error:
@@ -1530,6 +1533,36 @@ plot.bafta <- function(x, type = "traces", ...) {
   rownames(conv) <- colnames(Means)
   return(conv)
 }
+
+# Calculate effective sample size:
+CalcNeff <- function(object, keep, nsim, Rhat) {
+  nthin <- length(keep)
+  Varpl <- Rhat[, "Varpl"]
+  Tlags <- 200
+  rhoHat <- matrix(NA, nrow = Tlags, ncol = p)
+  for (tt in 1:Tlags) {
+    Vt <- 1 / (nsim * (nthin - tt)) * 
+      apply(sapply(1:nsim, function(im) {
+        bMat <- object[[im]]$theta[keep,, im]
+        apply(bMat, 2, function(bi) {
+          sum((bi[1:(nthin - tt + 1)] - bi[tt:nthin])^2)
+        })
+      }), 1, sum)
+    rhoHat[tt, ] <- 1 - Vt / Varpl
+  }
+  
+  # Find T:
+  Tthresh <- apply(rhoHat, 2, function(rhoi) {
+    which(rhoi[-1] + rhoi[-Tlags] < 0)[1]
+  })
+  
+  neff <- floor(sapply(1:p, function(ip) {
+    nsim * nthin / (1 + 2 * sum(rhoHat[1:Tthresh[ip], ip]))
+  }))
+  names(neff) <- rownames(Rhat)
+  return(neff)
+}
+
 
 # Calculate DIC:
 .CalcDIC <- function(likelihood, k) {
