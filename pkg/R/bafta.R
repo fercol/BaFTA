@@ -1267,14 +1267,14 @@ plot.bafta <- function(x, type = "traces", ...) {
   parsNow <- list(theta = parObj$thetaStart)
   
   # Fertility random effects parameter:
-  if (grepl("indiv", algObj$dataType)) {
-    RANDEFFU <- TRUE
-    parsNow$u <- rep(0, dataObj$ni)
-    parsNow$uSd <- 1
-  } else {
-    RANDEFFU <- FALSE
-  }
-  # RANDEFFU <- FALSE
+  # if (grepl("indiv", algObj$dataType)) {
+  #   RANDEFFU <- TRUE
+  #   parsNow$u <- rep(0, dataObj$ni)
+  #   parsNow$uSd <- 1
+  # } else {
+  #   RANDEFFU <- FALSE
+  # }
+  RANDEFFU <- FALSE
   
   # IBI random effects parameter:
   if (algObj$dataType == "indivExtended") {
