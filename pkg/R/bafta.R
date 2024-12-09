@@ -115,6 +115,9 @@ bafta.default <- function(object, dataType = "aggregated",
   
   # Run jump sd:
   if (UPDJUMP) {
+    cat("\nRunning sequence to find jump SDs... ")
+    Start <- Sys.time()
+    
     # Number of iterations for jump sds:
     niterJump <- 10000
     
@@ -127,6 +130,11 @@ bafta.default <- function(object, dataType = "aggregated",
     
     # Extract jump SD vector:
     jumpSD <- outJump$jumps
+    End <- Sys.time()
+    cat("Done\n")
+    compTime <- round(as.numeric(End-Start, units = units(End - Start)), 2)
+    cat(sprintf("Total jump SDs computing time: %.2f %s.\n\n", compTime, 
+                units(End - Start)))
   } else {
     if (is.null(jumpSD) | length(jumpSD) != parObj$pSamp) {
       stop(sprintf("Length of 'jumpSD' argument should be %s.\n", 
@@ -143,6 +151,9 @@ bafta.default <- function(object, dataType = "aggregated",
   #              ".SampleUSig", ".SampleVSig", "FertFun",
   #              "FertFun.numeric", "FertFun.matrix")
 
+  
+  cat("Multiple simulations started...\n\n") 
+  
   # BaFTAstart parallel computing:
   sfInit(parallel = TRUE, cpus = ncpus)
   
@@ -165,6 +176,8 @@ bafta.default <- function(object, dataType = "aggregated",
   
   # Stop cluster:
   sfStop()
+  
+  cat("Simulations finished.\n")
   
   # Extract variables for coefficients and DIC:
   for (ic in 1:nsim) {
@@ -336,6 +349,24 @@ bafta.default <- function(object, dataType = "aggregated",
   BaFTAend <- Sys.time()
   compTime <- sprintf("%s mins", signif(as.numeric(BaFTAend - BaFTAstart, 
                                                    units = "mins"), 2))
+  timeDiff <- BaFTAend - BaFTAstart
+  diffUnits <- units(timeDiff)
+  if (diffUnits == "secs" & as.numeric(timeDiff) < 60) {
+    tdiffUn <- round(as.numeric(BaFTAend - BaFTAstart, 
+                                units = 'secs'), 2)
+    compTime <- sprintf("%s secs", tdiffUn)
+  } else if (diffUnits == "secs" & as.numeric(timeDiff) >= 60 | 
+      diffUnits == "mins" & as.numeric(timeDiff) < 60) {
+    tdiffUn <- round(as.numeric(BaFTAend - BaFTAstart, 
+                                      units = 'mins'), 2)
+    compTime <- sprintf("%s mins", tdiffUn)
+  } else if (diffUnits == "mins" & as.numeric(timeDiff) >= 60 | 
+             diffUnits == "hours") {
+    tdiffUn <- round(as.numeric(BaFTAend - BaFTAstart, 
+                                      units = 'hours'), 2)
+    compTime <- sprintf("%s hours", tdiffUn)
+  } 
+  cat(sprintf("Total MCMC computing time: %s\n\n", compTime))
   
   # Settings:
   settings <- list(model = model, dataType = dataType, niter = niter, 
@@ -652,6 +683,38 @@ plot.bafta <- function(x, type = "traces", ...) {
   }
 }
 
+# Add min-max ages for unknown ages:
+CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
+  sunID <- unique(object$indID)
+  nind <- length(sunID)
+  if (is.null(unkAgeID)) {
+    idUnkAges <- 1:nind
+  } else {
+    if (!all(unkAgeID %in% sunID)) {
+      stop("Some individual IDs in 'unkAgeID' not found in object.")
+    }
+    idUnkAges <- which(sunID %in% unkAgeID)
+  }
+  if (any(object$Age < minAge)) {
+    stop("Some ages are earlier than minAge.")
+  }
+  if (any(object$Age > maxAge)) {
+    stop("Some ages are earlier than minAge.")
+  }
+  MinAge <- MaxAge <- object$Age
+  idUnkAges <- sample(1:ndat, 20)
+  for (ii in idUnkAges) {
+    idi <- which(object$indID == sunID[ii])
+    ranAges <- range(object$Age[idi])
+    deltaLow <- ranAges[1] - minAge
+    deltaHigh <- maxAge - ranAges[2]
+    MinAge[idi] <- object$Age[idi] - deltaLow
+    MaxAge[idi] <- object$Age[idi] + deltaHigh
+  }
+  object <- data.frame(object, MinAge = MinAge, MaxAge = MaxAge)
+  return(object)
+}
+
 # =========================== #
 # B) INTERNAL FUNCTIONS: ==== 
 # =========================== #
@@ -666,6 +729,31 @@ plot.bafta <- function(x, type = "traces", ...) {
               burnin = burnin, thinning = thinning, nsim = nsim, 
               minAge = minAge, UPDJUMP = UPDJUMP, jumpSD = jumpSD))
 }
+
+# Extract parameters specified by the user:
+.CreateUserPar <- function(argList) {
+  userPars <- list()
+  genParName <- c("theta", "gamma")
+  parTypes <- c("Start", "Jumps", "PriorMean", "PriorSd")
+  parTypesList <- c("start", "jump", "priorMean", "priorSd")
+  for (genPp in 1:2) {
+    if (all(genPp == 2 & inherits(covObj, c("fused", "propHaz"))) |
+        genPp == 1) {
+      userPars[[genParName[genPp]]] <- list()
+      for (pp in 1:4) {
+        usrPar <- sprintf("%s%s", genParName[genPp], parTypes[pp])
+        if (usrPar %in% names(argList)) {
+          userPars[[genParName[genPp]]][[parTypesList[pp]]] <- 
+            argList[[usrPar]]
+        } else {
+          userPars[[genParName[genPp]]][[parTypesList[pp]]] <- NULL 
+        }
+      }
+    }    
+  }
+  return(userPars)
+}
+
 
 # Prepare data object:
 .CreateDataObj <- function(object, algObj) {
@@ -687,7 +775,7 @@ plot.bafta <- function(x, type = "traces", ...) {
 
     # Create data object:
     do <- list(data = object, idages = idages, alpha = alpha, x = x,
-               xMax = max(x), n = n, dx = dx, idpar = idpar)
+               xMax = max(x), n = n, dx = dx, idpar = idpar, AgeUpdate = FALSE)
     class(do) <- "baftaAggr"
   } else if (algObj$dataType == "indivSimple") {
     if (is.na(algObj$minAge)) {
@@ -712,9 +800,24 @@ plot.bafta <- function(x, type = "traces", ...) {
     }
     y <- object$nOffspring
     rMat <- model.matrix(~ indID - 1, data = object)
+    unID <- unique(object$indID)
+    rMat <- rMat[, sprintf("indID%s", unID)]
     ni <- ncol(rMat)
+    if (all(c("MinAge", "MaxAge") %in% colnames(object))) {
+      idUpd <- which(object$Age != object$MinAge | 
+                          object$Age != object$MaxAge)
+      idAgeUpd <- which(unID %in% unique(object$indID[idUpd]))
+      AgeUpdate <- TRUE
+      nUpd <- length(idAgeUpd)
+    } else {
+      idAgeUpd <- NA
+      AgeUpdate <- FALSE
+      nUpd <- 0
+    }
     do <- list(data = object, x = x, y = y, rMat = rMat, ni = ni, 
-               xMax = max(x), n = n, dx = dx, alpha = alpha)
+               xMax = max(x), n = n, dx = dx, alpha = alpha, 
+               unID = unID, AgeUpdate = AgeUpdate, idUpd = idAgeUpd,
+               nUpd = nUpd)
     class(do) <- "baftaIndSimp"
   } else if (algObj$dataType == "indivExtended") {
     if (is.na(algObj$minAge)) {
@@ -747,6 +850,8 @@ plot.bafta <- function(x, type = "traces", ...) {
     }
     y <- object$nOffspring
     rMat <- model.matrix(~ indID - 1, data = object)
+    unID <- unique(object$indID)
+    rMat <- rMat[, sprintf("indID%s", unID)]
     ni <- ncol(rMat)
     z <- object$IBI
     nIBI <- c(rep(1, n) %*% (rMat * (1 - object$First)))
@@ -756,9 +861,22 @@ plot.bafta <- function(x, type = "traces", ...) {
     niv <- sum(idIBI)
     z[which(object$First == 0)] <- z[which(object$First == 0)] - tau
     w <- object$Age - alpha
+    if (all(c("MinAge", "MaxAge") %in% colnames(object))) {
+      idUpd <- which(object$Age != object$MinAge | 
+                       object$Age != object$MaxAge)
+      idAgeUpd <- which(unID %in% unique(object$indID[idUpd]))
+      AgeUpdate <- TRUE
+      nUpd <- length(idAgeUpd)
+    } else {
+      idAgeUpd <- NA
+      AgeUpdate <- FALSE
+      nUpd <- 0
+    }
+    
     do <- list(data = object, x = x, y = y, rMat = rMat, ni = ni, 
                xMax = max(x), z = z, w = w, n = n, alpha = alpha, tau = tau,
-               indv = idIBI, idv = idv, niv = niv)
+               indv = idIBI, idv = idv, niv = niv, unID = unID, 
+               AgeUpdate = AgeUpdate, idUpd = idAgeUpd, nUpd = nUpd)
     class(do) <- "baftaIndExt"
   }
   return(do)
@@ -1243,21 +1361,79 @@ plot.bafta <- function(x, type = "traces", ...) {
   return(sig)
 }
 
+# Sample unknown ages:
+.SampleAges <- function(dataObj, ...) UseMethod(".SampleAges")
+
+.SampleAges.baftaAggr <- function(dataObj, algObj) {
+  return(dataObj)
+}
+
+.SampleAges.baftaIndSimp <- function(dataObj, algObj) {
+  dataObjUpd <- dataObj
+  dataNew <- dataObj$data
+  for (iid in dataObj$idUpd) {
+    id <- which(dataNew$indID == dataObj$unID[iid])
+    updRan <- c(dataNew$MinAge[id[1]], dataNew$MaxAge[id[1]]) - 
+      dataNew$Age[id[1]]
+    deltaAge <- round(.rtnorm(n = 1, mean = 0, sd = 1, lower = updRan[1],
+                              upper = updRan[2]))
+    dataNew$Age[id] <- dataObj$data$Age[id] + deltaAge
+  }
+  
+  x <- dataNew$Age - dataObj$alpha
+  dx <- min(diff(sort(unique(x))))
+  # Adjust first age > 0 for certain models:
+  if (algObj$model %in% c("gamma", "beta", "gammaMixture", "Hadwiger", 
+                          "HadwigerMixture")) {
+    x[which(x == 0)] <- 0.005
+  }
+  dataObjUpd$data <- dataNew
+  dataObjUpd$x <- x
+  return(dataObjUpd)
+}
+
+.SampleAges.baftaIndExt <- function(dataObj, algObj) {
+  dataObjUpd <- dataObj
+  dataNew <- dataObj$data
+  for (iid in dataObj$idUpd) {
+    id <- which(dataNew$indID == dataObj$unID[iid])
+    updRan <- c(dataNew$MinAge[id[1]], dataNew$MaxAge[id[1]]) - 
+      dataNew$Age[id[1]]
+    deltaAge <- .rtnorm(n = 1, mean = 0, sd = 1, lower = updRan[1],
+                              upper = updRan[2])
+    dataNew$Age[id] <- dataObj$data$Age[id] + deltaAge
+  }
+  
+  x <- dataNew$Age - dataObj$alpha
+  dx <- min(diff(sort(unique(x))))
+  # Adjust first age > 0 for certain models:
+  if (algObj$model %in% c("gamma", "beta", "gammaMixture", "Hadwiger", 
+                          "HadwigerMixture")) {
+    x[which(x == 0)] <- 0.005
+  }
+  dataObjUpd$data <- dataNew
+  dataObjUpd$x <- x
+  dataObjUpd$w <- dataNew$Age - dataObj$alpha
+  
+  return(dataObjUpd)
+}
+
 # Function to update jumps in MCMC:
 .UpdateJumps <- function(updMat, jumps, iter, iterUpd = 50, 
-                                updTarg = 0.25) {
+                         updTarg = 0.25) {
   updRate <- apply(updMat[iter - ((iterUpd - 1):0), ], 2, sum) / iterUpd  
   updRate[updRate == 0] <- 1e-2
   jumps <- jumps * updRate / updTarg
   return(jumps)
 }
 
+
 # =============== #
 # ==== MCMC: ====
 # =============== #
 .RunMCMC <- function(sim, dataObj, parObj, niter, algObj, FertFun, 
-                    FertFun.numeric, FertFun.matrix,
-                    jumpSD = NULL, UPDJUMP = TRUE) {
+                     FertFun.numeric, FertFun.matrix,
+                     jumpSD = NULL, UPDJUMP = TRUE) {
   # Restart the random seed for each core:
   if (sim > 1) {
     rm(".Random.seed", envir = .GlobalEnv); runif(1)
@@ -1285,8 +1461,11 @@ plot.bafta <- function(x, type = "traces", ...) {
     RANDEFFV <- FALSE
   }
   
+  # Start dataObj:
+  dataObjNow <- dataObj
+  
   # Calculate likelihood and posteriors:
-  likeNow <- .CalcLikeFert(dataObj = dataObj, pars = parsNow, 
+  likeNow <- .CalcLikeFert(dataObj = dataObjNow, pars = parsNow, 
                            FertFun = FertFun, 
                            FertFun.numeric = FertFun.numeric)
   postNow <- .CalcPostTheta(pars = parsNow, like = likeNow, 
@@ -1306,7 +1485,7 @@ plot.bafta <- function(x, type = "traces", ...) {
               upper = parObj$thetaUpper[parObj$idSamp])
     
     # Calculate likelihood and posteriors:
-    likeNow <- .CalcLikeFert(dataObj = dataObj, pars = parsNow, 
+    likeNow <- .CalcLikeFert(dataObj = dataObjNow, pars = parsNow, 
                              FertFun = FertFun, 
                              FertFun.numeric = FertFun.numeric)
     postNow <- .CalcPostTheta(pars = parsNow, like = likeNow, 
@@ -1319,18 +1498,36 @@ plot.bafta <- function(x, type = "traces", ...) {
   }
   
   # Calculate likelihood and posteriors:
-  likeNow <- .CalcLikeFert(dataObj = dataObj, pars = parsNow, 
+  likeNow <- .CalcLikeFert(dataObj = dataObjNow, pars = parsNow, 
                            FertFun = FertFun, 
                            FertFun.numeric = FertFun.numeric)
   postNow <- .CalcPostTheta(pars = parsNow, like = likeNow, 
                             parObj = parObj)
+  
+  if (dataObj$AgeUpdate) {
+    likeIndNow <- c(t(likeNow) %*% dataObj$rMat)
+    
+    # Prior for proposed ages:
+    priorNow <- .dtnorm(x = dataObjNow$data$Age, 
+                        mean = dataObj$data$Age, sd = 2, 
+                        lower = dataObj$data$MinAge, 
+                        upper = dataObj$data$MaxAge, 
+                        log = TRUE)
+    priorNow[which(priorNow == Inf)] <- 0
+    priorIndNow <- c(t(priorNow) %*% dataObj$rMat)
+    
+    # Posterior for proposed ages:
+    postIndNow <- likeIndNow + priorIndNow
+    
+  }
+  
   if (RANDEFFU) {
-    postUNow <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNow,
-                                 like = likeNow)
+    postUNow <- .CalcPostRandEffU(dataObj = dataObjNow, pars = parsNow,
+                                  like = likeNow)
   }
   
   if (RANDEFFV) {
-    postVNow <- .CalcPostRandEffV(dataObj = dataObj, pars = parsNow, 
+    postVNow <- .CalcPostRandEffV(dataObj = dataObjNow, pars = parsNow, 
                                   like = likeNow)
   }
   
@@ -1348,6 +1545,7 @@ plot.bafta <- function(x, type = "traces", ...) {
     uSdOut <- NA
     vOut <- NA
     vSdOut <- NA
+    ageOut <- NA
     
   } else {
     parOut <- matrix(NA, nrow = niter, ncol = parObj$p,
@@ -1356,6 +1554,16 @@ plot.bafta <- function(x, type = "traces", ...) {
                           dimnames = list(NULL, c("Likelihood", "Posterior")))
     parOut[1, ] <- parsNow$theta
     likePostOut[1, ] <- c(sum(likeNow), postNow)
+    if (dataObj$AgeUpdate) {
+      ageOut <- matrix(NA, nrow = niter, ncol = dataObj$nUpd)
+      idFirstAge <- sapply(dataObj$idUpd, function(iid) {
+        idi <- which(dataObj$data$indID == dataObj$unID[iid])
+        return(idi[which(dataObj$data$Age[idi] == min(dataObj$data$Age[idi]))])
+      })
+      ageOut[1, ] <- dataObjNow$data$Age[idFirstAge]
+    } else {
+      ageOut <- NA
+    }
     if (RANDEFFU) {
       uOut <- matrix(NA, nrow = niter, ncol = dataObj$ni)
       uOut[1, ] <- parsNow$u
@@ -1374,11 +1582,9 @@ plot.bafta <- function(x, type = "traces", ...) {
       vOut <- NA
       vSdOut <- NA
     }
-    
-    
   }
   
-  
+  # Start MCMC:
   for (iter in 2:niter) {
     for (ip in parObj$idSamp) {
       idj <- which(parObj$idSamp == ip)
@@ -1387,7 +1593,7 @@ plot.bafta <- function(x, type = "traces", ...) {
                                    sd = jumpSD[idj],
                                    lower = parObj$thetaLower[ip], 
                                    upper = parObj$thetaUpper[ip])
-      likeNew <- .CalcLikeFert(dataObj = dataObj, pars = parsNew, 
+      likeNew <- .CalcLikeFert(dataObj = dataObjNow, pars = parsNew, 
                                FertFun = FertFun, 
                                FertFun.numeric = FertFun.numeric)
       postNew <- .CalcPostTheta(pars = parsNew, like = likeNew, 
@@ -1395,7 +1601,7 @@ plot.bafta <- function(x, type = "traces", ...) {
       mhRatio <- .CalcMHratio(parsNow = parsNow, parsNew = parsNew, 
                               jumpSD = jumpSD, parObj = parObj, ip = ip)
       postRatio <- exp(postNew - postNow + mhRatio)
-
+      
       if (!is.na(postRatio)) {
         if (postRatio > runif(n = 1)) {
           parsNow <- parsNew
@@ -1409,71 +1615,122 @@ plot.bafta <- function(x, type = "traces", ...) {
     # Random effects fertility:
     
     if (RANDEFFU & iter / 2 == floor(iter / 2)) {
-      postUNow <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNow,
+      postUNow <- .CalcPostRandEffU(dataObj = dataObjNow, pars = parsNow,
                                     like = likeNow)
       # Sample U values:
       parsNew <- parsNow
       parsNew$u <- rnorm(n = dataObj$ni, mean = parsNow$u, sd = 0.1)
-      likeNew <- .CalcLikeFert(dataObj = dataObj, pars = parsNew,
+      likeNew <- .CalcLikeFert(dataObj = dataObjNow, pars = parsNew,
                                FertFun = FertFun,
                                FertFun.numeric = FertFun.numeric)
-      postUNew <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNew,
+      postUNew <- .CalcPostRandEffU(dataObj = dataObjNow, pars = parsNew,
                                     like = likeNew)
       acceptRatio <- exp(postUNew - postUNow)
       ranU <- runif(dataObj$ni)
       idUpd <- which(acceptRatio > ranU)
       parsNow$u[idUpd] <- parsNew$u[idUpd]
       postUNow[idUpd] <- postUNew[idUpd]
-      likeNow <- .CalcLikeFert(dataObj = dataObj, pars = parsNow,
+      likeNow <- .CalcLikeFert(dataObj = dataObjNow, pars = parsNow,
                                FertFun = FertFun,
                                FertFun.numeric = FertFun.numeric)
       postNow <- .CalcPostTheta(pars = parsNow, like = likeNow,
                                 parObj = parObj)
-
+      
       # Sample sigma:
-      parsNow$uSd <- .SampleUSig(dataObj = dataObj, pars = parsNow,
+      parsNow$uSd <- .SampleUSig(dataObj = dataObjNow, pars = parsNow,
                                  parObj = parObj)
-      postUNow <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNow,
+      postUNow <- .CalcPostRandEffU(dataObj = dataObjNow, pars = parsNow,
                                     like = likeNow)
-
+      
     }
     
     # Random effects IBI:
     if (RANDEFFV & iter / 2 == floor(iter / 2)) {
-      postVNow <- .CalcPostRandEffV(dataObj = dataObj, pars = parsNow, 
+      postVNow <- .CalcPostRandEffV(dataObj = dataObjNow, pars = parsNow, 
                                     like = likeNow)
       # Sample U values:
       parsNew <- parsNow
       parsNew$v[dataObj$idv] <- rnorm(n = dataObj$niv, 
                                       mean = parsNow$v[dataObj$idv], sd = 0.1)
-      likeNew <- .CalcLikeFert(dataObj = dataObj, pars = parsNew, 
+      likeNew <- .CalcLikeFert(dataObj = dataObjNow, pars = parsNew, 
                                FertFun = FertFun, 
                                FertFun.numeric = FertFun.numeric)
-      postVNew <- .CalcPostRandEffV(dataObj = dataObj, pars = parsNew, 
+      postVNew <- .CalcPostRandEffV(dataObj = dataObjNow, pars = parsNew, 
                                     like = likeNew)
       acceptRatio <- exp(postVNew - postVNow)
       ranV <- runif(dataObj$niv)
       idUpd <- which(acceptRatio > ranV)
       parsNow$v[dataObj$idv[idUpd]] <- parsNew$v[dataObj$idv[idUpd]]
       postVNow[dataObj$idv[idUpd]] <- postVNew[dataObj$idv[idUpd]]
-      likeNow <- .CalcLikeFert(dataObj = dataObj, pars = parsNow, 
+      likeNow <- .CalcLikeFert(dataObj = dataObjNow, pars = parsNow, 
                                FertFun = FertFun, 
                                FertFun.numeric = FertFun.numeric)
       postNow <- .CalcPostTheta(pars = parsNow, like = likeNow, 
                                 parObj = parObj)
       if (RANDEFFU) {
-        postUNow <- .CalcPostRandEffU(dataObj = dataObj, pars = parsNow, 
+        postUNow <- .CalcPostRandEffU(dataObj = dataObjNow, pars = parsNow, 
                                       like = likeNow)
         
       }
       
       # Sample sigma:
-      parsNow$vSd <- .SampleVSig(dataObj = dataObj, pars = parsNow, 
+      parsNow$vSd <- .SampleVSig(dataObj = dataObjNow, pars = parsNow, 
                                  parObj = parObj)
-      postVNow <- .CalcPostRandEffV(dataObj = dataObj, pars = parsNow, 
+      postVNow <- .CalcPostRandEffV(dataObj = dataObjNow, pars = parsNow, 
                                     like = likeNow)
       
     } 
+    
+    
+    # Sample unknown ages:
+    if (dataObj$AgeUpdate) {
+      # Update individual likelihood:
+      likeIndNow <- c(t(likeNow) %*% dataObj$rMat)
+      
+      # Posterior for proposed ages:
+      postIndNow <- likeIndNow + priorIndNow
+      
+      # Sample ages:
+      dataObjNew <- .SampleAges(dataObj = dataObjNow, algObj = algObj)
+      
+      # Calculate likelihood and posteriors:
+      likeNew <- .CalcLikeFert(dataObj = dataObjNew, pars = parsNow, 
+                               FertFun = FertFun, 
+                               FertFun.numeric = FertFun.numeric)
+      
+      # Update individual likelihood:
+      likeIndNew <- c(t(likeNew) %*% dataObj$rMat)
+      
+      # Prior for proposed ages:
+      priorNew <- .dtnorm(x = dataObjNew$data$Age, 
+                          mean = dataObj$data$Age, sd = 2, 
+                          lower = dataObj$data$MinAge, 
+                          upper = dataObj$data$MaxAge, 
+                          log = TRUE)
+      priorNew[which(priorNew == Inf)] <- 0
+      priorIndNew <- c(t(priorNew) %*% dataObj$rMat)
+      
+      # Posterior for proposed ages:
+      postIndNew <- likeIndNew + priorIndNew
+      postRatio <- exp(postIndNew - postIndNow)
+      idUpd <- dataObj$idUpd[which(postRatio[dataObj$idUpd] > 
+                                     runif(n = dataObj$nUpd))]
+      if (length(idUpd) > 0) {
+        idUpdAll <- which(dataObj$data$indID %in% dataObj$unID[idUpd])
+        postIndNow[idUpd] <- postIndNew[idUpd]
+        priorIndNow[idUpd] <- priorIndNew[idUpd]
+        likeIndNow[idUpd] <- likeIndNew[idUpd]
+        priorNow[idUpdAll] <- priorNew[idUpdAll]
+        likeNow[idUpdAll] <- likeNew[idUpdAll]
+        dataObjNow$data$Age[idUpdAll] <- dataObjNew$data$Age[idUpdAll]
+        dataObjNow$x[idUpdAll] <- dataObjNew$x[idUpdAll]
+        if (inherits(dataObjNow, "baftaIndExt")) {
+          dataObjNow$w[idUpdAll] <- dataObjNew$w[idUpdAll]
+        }
+        postNow <- .CalcPostTheta(pars = parsNow, like = likeNow, 
+                                  parObj = parObj)
+      }
+    }
     
     # Update jumps:
     if (UPDJUMP) {
@@ -1485,6 +1742,9 @@ plot.bafta <- function(x, type = "traces", ...) {
     } else {
       parOut[iter, ] <- parsNow$theta
       likePostOut[iter, ] <- c(sum(likeNow), postNow)
+      if (dataObj$AgeUpdate) {
+        ageOut[iter, ] <- dataObjNow$data$Age[idFirstAge]
+      }
       if (RANDEFFU) {
         uOut[iter, ] <- parsNow$u
         uSdOut[iter] <- parsNow$uSd
@@ -1496,7 +1756,7 @@ plot.bafta <- function(x, type = "traces", ...) {
     }
   }
   
-
+  
   if (UPDJUMP) {
     nJumps <- nrow(jumpOut)
     idJumps <- floor(nJumps / 2):nJumps
@@ -1506,8 +1766,9 @@ plot.bafta <- function(x, type = "traces", ...) {
     jumpOut <- NA
   }
   outList <- list(theta = parOut, likePost = likePostOut, u = uOut,
-                  uSd = uSdOut, v = vOut, vSd = vSdOut, jumps = jumpSdFin,
-                  jumpMat = jumpOut)
+                  uSd = uSdOut, v = vOut, vSd = vSdOut, age = ageOut,
+                  jumps = jumpSdFin, jumpMat = jumpOut) 
+  compEnd <- Sys.time()
   return(outList)
 }
 
@@ -1540,7 +1801,7 @@ plot.bafta <- function(x, type = "traces", ...) {
 .CalcNeff <- function(object, keep, nsim, Rhat) {
   nthin <- length(keep)
   Varpl <- Rhat[, "Varpl"]
-  Tlags <- 200
+  Tlags <- min(c(200, nthin - 1))
   nTheta <- ncol(object[[1]]$theta)
   rhoHat <- matrix(NA, nrow = Tlags, ncol = nTheta)
   for (tt in 1:Tlags) {
@@ -1558,6 +1819,9 @@ plot.bafta <- function(x, type = "traces", ...) {
   Tthresh <- apply(rhoHat, 2, function(rhoi) {
     which(rhoi[-1] + rhoi[-Tlags] < 0)[1]
   })
+  
+  idna <- which(is.na(Tthresh))
+  if (length(idna) > 0) Tthresh[idna] <- Tlags
   
   neff <- floor(sapply(1:nTheta, function(ip) {
     nsim * nthin / (1 + 2 * sum(rhoHat[1:Tthresh[ip], ip]))
@@ -1690,3 +1954,4 @@ plot.bafta <- function(x, type = "traces", ...) {
 
 # ============= #
 # ==== END ====
+# ============= #
