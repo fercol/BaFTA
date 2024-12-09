@@ -1,6 +1,6 @@
 # Export user functions
 export("bafta", "bafta.default", "print.bafta", "summary.bafta", 
-       "plot.bafta")
+       "plot.bafta", "CalcMinMaxAge")
 
 # Import package snowfall
 import("snowfall")
