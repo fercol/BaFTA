@@ -78,41 +78,15 @@ bafta.default <- function(object, dataType = "aggregated",
   # Create parameter object:
   parObj <- .BuildParObj(algObj = algObj, dataObj = dataObj)
   
+  # Update parObj with user parameters:
+  parObj <- .CreateUserPar(argList = argList, argNames = argNames, 
+                           parObj = parObj, dataObj = dataObj)
+  
   # Number of iterations kept for inference:
   keep <- seq(burnin, niter, thinning)
-  
-  # Verify if starting parameters are specified:
-  if ("thetaStart" %in% argNames) {
-    if (length(argList$thetaStart) != parObj$p) {
-      stop(sprintf("Length of 'thetaStart' argument should be %s.\n", parObj$p))
-    } else {
-      parObj$thetaStart <- argList$thetaStart
-      names(parObj$thetaStart) <- parObj$thetaName
-    }
-  }
-  
-  # Verify if mean priors are specified:
-  if ("thetaPriorMean" %in% argNames) {
-    if (length(argList$thetaPriorMean) != parObj$p) {
-      stop(sprintf("Length of 'thetaPriorMean' argument should be %s.\n", 
-                   parObj$p))
-    } else {
-      parObj$thetaPriorMean <- argList$thetaPriorMean
-      names(parObj$thetaPriorMean) <- parObj$thetaName
-    }
-  }
-  
-  # Verify if SD priors are specified:
-  if ("thetaPriorSD" %in% argNames) {
-    if (length(argList$thetaPriorSD) != parObj$p) {
-      stop(sprintf("Length of 'thetaPriorSD' argument should be %s.\n", 
-                   parObj$p))
-    } else {
-      parObj$thetaPriorSD <- argList$thetaPriorSD
-      names(parObj$thetaPriorSD) <- parObj$thetaName
-    }
-  }
-  
+  nkeep <- length(keep)
+  # keepind <- burnin:niter
+
   # Run jump sd:
   if (UPDJUMP) {
     cat("\nRunning sequence to find jump SDs... ")
@@ -185,13 +159,13 @@ bafta.default <- function(object, dataType = "aggregated",
       thetaMat <- outMCMC[[ic]]$theta[keep, ]
       likeMat <- outMCMC[[ic]]$likePost[keep, ]
       if (RANDEFFU) {
-        uSdVec <- outMCMC[[ic]]$uSd[keep]
+        # uSdVec <- outMCMC[[ic]]$uSd[keep]
         uMat <- outMCMC[[ic]]$u[keep, ]
       } else {
         uMat <- NA
       }
       if (RANDEFFV) {
-        vSdVec <- outMCMC[[ic]]$vSd[keep]
+        # vSdVec <- outMCMC[[ic]]$vSd[keep]
         vMat <- outMCMC[[ic]]$v[keep, ]
       } else {
         vMat <- NA
@@ -201,11 +175,11 @@ bafta.default <- function(object, dataType = "aggregated",
       thetaMat <- rbind(thetaMat, outMCMC[[ic]]$theta[keep, ])
       likeMat <- rbind(likeMat, outMCMC[[ic]]$likePost[keep, ])
       if (RANDEFFU) {
-        uSdVec <- c(uSdVec, outMCMC[[ic]]$uSd[keep])
+        # uSdVec <- c(uSdVec, outMCMC[[ic]]$uSd[keep])
         uMat <- rbind(uMat, outMCMC[[ic]]$u[keep, ])
       } 
       if (RANDEFFV) {
-        vSdVec <- c(vSdVec, outMCMC[[ic]]$vSd[keep])
+        # vSdVec <- c(vSdVec, outMCMC[[ic]]$vSd[keep])
         vMat <- rbind(vMat, outMCMC[[ic]]$v[keep, ])
       } 
     }
@@ -218,19 +192,23 @@ bafta.default <- function(object, dataType = "aggregated",
   Neff <- .CalcNeff(object = outMCMC, keep = keep, nsim = ncpus, Rhat = Conv)
   
   # Extract average parameters:
-  coeffs <- cbind(Mean = apply(thetaMat[, parObj$idSamp],  2, mean), 
-                  SD = apply(thetaMat[, parObj$idSamp], 2, sd),
-                  Lower = apply(thetaMat[, parObj$idSamp], 2, quantile, 0.025),
-                  Upper = apply(thetaMat[, parObj$idSamp], 2, quantile, 0.975),
-                  Neff = Neff, Rhat = Conv[parObj$idSamp, "Rhat"])
+  idPars <- parObj$idSamp
+  if (inherits(dataObj, "baftaIndExt")) {
+    idPars <- c(idPars, max(idPars) + 1)
+  }
+  coeffs <- cbind(Mean = apply(thetaMat[, idPars],  2, mean), 
+                  SD = apply(thetaMat[, idPars], 2, sd),
+                  Lower = apply(thetaMat[, idPars], 2, quantile, 0.025),
+                  Upper = apply(thetaMat[, idPars], 2, quantile, 0.975),
+                  Neff = Neff[idPars], Rhat = Conv[idPars, "Rhat"])
   
   if (RANDEFFU) {
     # Include random effect standard error:
-    coeffs <- rbind(coeffs, uSd = c(Mean = mean(uSdVec), SD = sd(uSdVec),
-                                    Lower = quantile(uSdVec, 0.025),
-                                    Upper = quantile(uSdVec, 0.975),
-                                    Neff = length(keep) * nsim,
-                                    Rhat = 1))
+    # coeffs <- rbind(coeffs, uSd = c(Mean = mean(uSdVec), SD = sd(uSdVec),
+    #                                 Lower = quantile(uSdVec, 0.025),
+    #                                 Upper = quantile(uSdVec, 0.975),
+    #                                 Neff = length(keep) * nsim,
+    #                                 Rhat = 1))
     # Merge thetaMat with uSd:
     # thetaMat <- cbind(thetaMat, uSD = uSdVec)
     
@@ -245,11 +223,11 @@ bafta.default <- function(object, dataType = "aggregated",
   
   if (RANDEFFV) {
     # Include random effect standard error:
-    coeffs <- rbind(coeffs, vSd = c(Mean = mean(vSdVec), SD = sd(vSdVec),
-                                    Lower = quantile(vSdVec, 0.025),
-                                    Upper = quantile(vSdVec, 0.975),
-                                    Neff = length(keep) * nsim,
-                                    Rhat = 1))
+    # coeffs <- rbind(coeffs, vSd = c(Mean = mean(vSdVec), SD = sd(vSdVec),
+    #                                 Lower = quantile(vSdVec, 0.025),
+    #                                 Upper = quantile(vSdVec, 0.975),
+    #                                 Neff = length(keep) * nsim,
+    #                                 Rhat = 1))
     # Merge thetaMat with uSd:
     # thetaMat <- cbind(thetaMat, uSD = uSdVec)
     
@@ -262,13 +240,88 @@ bafta.default <- function(object, dataType = "aggregated",
     vQuant <- NA
   }
   
+  # Summary for unknown ages:
+  if (dataObj$AgeUpdate) {
+    # Index of values to be kept (after burn-in):
+    keepAges <- algObj$burnin:algObj$niter
+    
+    # Age Estimation matrix:
+    ageMat <- outMCMC[[1]]$age[keepAges, ]
+    fullAgeMat <- matrix(dataObj$data$Age, nrow = nkeep, ncol = dataObj$n,
+                         byrow = TRUE)
+    fullAgeMat[, dataObj$idAgeUpd] <- t(outMCMC[[1]]$age[keep, ])
+    for (isim in 2:algObj$nsim) {
+      ageMat <- rbind(ageMat, outMCMC[[isim]]$age[keepAges, ])
+      tempFull <- matrix(dataObj$data$Age, nrow = nkeep, ncol = dataObj$n,
+                         byrow = TRUE)
+      tempFull[, dataObj$idAgeUpd] <- t(outMCMC[[isim]]$age[keep, ])
+      fullAgeMat <- rbind(fullAgeMat, tempFull)
+    }
+    
+    # ID ages:
+    agesID <- object$indID[dataObj$idFirstAge]
+    
+    # Summary of age estimation:
+    ageQuant <- cbind(indID = agesID, Mean = apply(ageMat, 2, mean),
+                      SD = apply(ageMat, 2, sd),
+                      Lower = apply(ageMat, 2, quantile, prob = 0.025, 
+                                    names = FALSE),
+                      Upper = apply(ageMat, 2, quantile, prob = 0.975, 
+                                    names = FALSE),
+                      userAge = object$Age[dataObj$idFirstAge])
+    # Create full age matrix for predictive loss calculations:
+    
+  } else {
+    ageQuant <- NA
+    fullAgeMat <- NA
+  }
+  
+  
+  # Summary for unknown offspring:
+  if (dataObj$offsUpdate) {
+    # Index of values to be kept (after burn-in):
+    keepAges <- algObj$burnin:algObj$niter
+    
+    # Age Estimation matrix:
+    offsMat <- outMCMC[[1]]$offsOut[keepAges, ]
+    fullOffsMat <- matrix(dataObj$data$nOffspring, nrow = nkeep, 
+                          ncol = dataObj$n, byrow = TRUE)
+    fullOffsMat[, dataObj$idOffsUpd] <- t(outMCMC[[1]]$offsOut[keep, ])
+    
+    for (isim in 2:algObj$nsim) {
+      offsMat <- rbind(offsMat, outMCMC[[isim]]$offsOut[keepAges, ])
+      tempFull <- matrix(dataObj$data$nOffspring, nrow = nkeep, 
+                         ncol = dataObj$n, byrow = TRUE)
+      tempFull[, dataObj$idOffsUpd] <- t(outMCMC[[isim]]$offsOut[keep, ])
+      fullOffsMat <- rbind(fullOffsMat, tempFull)
+      
+    }
+    
+    # ID ages:
+    offsID <- object$indID[dataObj$idOffsUpd]
+    
+    # Summary of age estimation:
+    offsQuant <- cbind(indID = offsID, Mean = apply(offsMat, 2, mean),
+                       SD = apply(offsMat, 2, sd),
+                       Lower = apply(offsMat, 2, quantile, prob = 0.025, 
+                                     names = FALSE),
+                       Upper = apply(offsMat, 2, quantile, prob = 0.975, 
+                                     names = FALSE),
+                       obsOffs = object$nOffspring[dataObj$idOffsUpd])
+    
+  } else {
+    offsQuant <- NA
+    fullOffsMat <- NA
+  }
+  
   # Calculate DIC:
   DIC <- .CalcDIC(likelihood = likeMat[, "Likelihood"], 
                   k = length(parObj$idSamp))
   
   # Y predicted:
   yPred <- .CalcYpred(dataObj = dataObj, thetaMat = thetaMat, uMat = uMat,
-                      FertFun = FertFun, FertFun.numeric = FertFun.numeric)
+                      ageMat = fullAgeMat, FertFun = FertFun, 
+                      FertFun.numeric = FertFun.numeric)
   
   # Calculate predictive loss:
   PredLoss <- .CalcPredLoss(dataObj = dataObj, yPred = yPred)
@@ -298,7 +351,8 @@ bafta.default <- function(object, dataType = "aggregated",
       return(c(nParents = nPariAvail, nOffspring = nOffs, 
                nParentsAll = nPariAll))
     }))
-    aggrData <- data.frame(Age = xag[-nxag], tempag, 
+    dx <- diff(xag[1:2])
+    aggrData <- data.frame(Age = xag[-nxag] + dx / 2, tempag, 
                            Fertility = tempag[, 2] / tempag[, 1],
                            RealizedFert = tempag[, 2] / tempag[, 3])
   }
@@ -308,6 +362,7 @@ bafta.default <- function(object, dataType = "aggregated",
     dataObj$alpha
   
   # Calculate estimated fertility from parameter posteriors:
+  
   fertAll <- apply(thetaMat, 1, function(be) {
     fert <- FertFun(be, xv)
     return(fert)
@@ -375,11 +430,11 @@ bafta.default <- function(object, dataType = "aggregated",
   
   # store output:
   fullOut <- list(coefficients = coeffs, x = xv, fert = fertQuant, 
-                  theta = thetaMat, uSd = uSdVec, vSd = vSdVec, 
+                  theta = thetaMat, uSd = uSdVec, 
                   likePost = likeMat, DIC = DIC, PredLoss = PredLoss, 
-                  pred = predQuant, aggrData = aggrData,
-                  runs = outMCMC, data = dataObj, settings = settings,
-                  keep = keep, params = parObj)
+                  pred = predQuant, ages = ageQuant, estOffs = offsQuant, 
+                  aggrData = aggrData, runs = outMCMC, data = dataObj, 
+                  settings = settings, keep = keep, params = parObj)
   
   class(fullOut) <- "bafta"
   return(fullOut)
@@ -499,6 +554,11 @@ plot.bafta <- function(x, type = "traces", ...) {
     pSamp <- x$params$pSamp
     idSamp <- x$params$idSamp
     pName <- x$params$thetaName[idSamp]
+    if (x$settings$dataType == "indivExtended") {
+      pSamp <- pSamp + 1
+      idSamp <- c(idSamp, max(idSamp) + 1)
+      pName <- c(pName, "vSd")
+    }
     nsim <- x$settings$nsim
     ylim <- sapply(1:pSamp, function(ipar) {
       range(sapply(1:nsim, function(isim) {
@@ -513,14 +573,14 @@ plot.bafta <- function(x, type = "traces", ...) {
       # ylim <- cbind(ylim, uyl)
       # pPars <- pSamp + 1
       # pName <- c(pName, "uSd")
-      if (x$settings$dataType == "indivExtended") {
-        vyl <- range(sapply(1:nsim, function(isim) {
-          range(x$runs[[isim]]$vSd)
-        }))
-        ylim <- cbind(ylim, vyl)
-        pPars <- pSamp + 1
-        pName <- c(pName, "vSd")
-      }
+      # if (x$settings$dataType == "indivExtended") {
+      #   vyl <- range(sapply(1:nsim, function(isim) {
+      #     range(x$runs[[isim]]$vSd)
+      #   }))
+      #   ylim <- cbind(ylim, vyl)
+      #   pPars <- pSamp + 1
+      #   pName <- c(pName, "vSd")
+      # }
     } else {
       pPars <- pSamp
     }
@@ -539,41 +599,47 @@ plot.bafta <- function(x, type = "traces", ...) {
         lines(idkeep, x$runs[[ic]]$theta[idkeep, ipar], col = ic)
       }
     }
-    if (grepl("indiv", x$settings$dataType)) {
+    # if (grepl("indiv", x$settings$dataType)) {
       # plot(idkeep, x$runs[[1]]$uSd[idkeep], type = 'l',
       #      ylim = ylim[, ncol(ylim)], xlab = "Iteration", ylab = "Parameter",
       #      main = "uSd")
       # for (ic in 2:nsim) {
       #   lines(idkeep, x$runs[[ic]]$uSd[idkeep], col = ic)
       # }
-      if (x$settings$dataType == "indivExtended") {
-        plot(idkeep, x$runs[[1]]$vSd[idkeep], type = 'l',
-             ylim = ylim[, ncol(ylim)], xlab = "Iteration", ylab = "Parameter",
-             main = "vSd")
-        for (ic in 2:nsim) {
-          lines(idkeep, x$runs[[ic]]$vSd[idkeep], col = ic)
-        }
+      # if (x$settings$dataType == "indivExtended") {
+      #   plot(idkeep, x$runs[[1]]$vSd[idkeep], type = 'l',
+      #        ylim = ylim[, ncol(ylim)], xlab = "Iteration", ylab = "Parameter",
+      #        main = "vSd")
+      #   for (ic in 2:nsim) {
+      #     lines(idkeep, x$runs[[ic]]$vSd[idkeep], col = ic)
+      #   }
         
-      }
-    }
+      # }
+    # }
     
   } else if (type == "density") {
+    idkeep <- seq(1, x$settings$niter, x$settings$thinning)
     pSamp <- x$params$pSamp
     idSamp <- x$params$idSamp
     pName <- x$params$thetaName[idSamp]
-    parMat <- x$theta[, idSamp]
-    if (grepl("indiv", x$settings$dataType)) {
-      # parMat <- cbind(parMat, uSD = x$uSd)
-      # idSamp <- c(idSamp, max(idSamp) + 1)
-      # pSamp <- length(idSamp)
-      # pName <- c(pName, "uSd")
-      if (x$settings$dataType == "indivExtended") {
-        parMat <- cbind(parMat, vSD = x$vSd)
-        idSamp <- c(idSamp, max(idSamp) + 1)
-        pSamp <- length(idSamp)
-        pName <- c(pName, "vSd")
-      }
+    if (x$settings$dataType == "indivExtended") {
+      pSamp <- pSamp + 1
+      idSamp <- c(idSamp, max(idSamp) + 1)
+      pName <- c(pName, "vSd")
     }
+    parMat <- x$theta[, idSamp]
+    # if (grepl("indiv", x$settings$dataType)) {
+    #   # parMat <- cbind(parMat, uSD = x$uSd)
+    #   # idSamp <- c(idSamp, max(idSamp) + 1)
+    #   # pSamp <- length(idSamp)
+    #   # pName <- c(pName, "uSd")
+    #   if (x$settings$dataType == "indivExtended") {
+    #     parMat <- cbind(parMat, vSD = x$vSd)
+    #     idSamp <- c(idSamp, max(idSamp) + 1)
+    #     pSamp <- length(idSamp)
+    #     pName <- c(pName, "vSd")
+    #   }
+    # }
     
     nsim <- x$settings$nsim
     pDens <- lapply(1:pSamp, function(ipar) {
@@ -702,7 +768,6 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
     stop("Some ages are earlier than minAge.")
   }
   MinAge <- MaxAge <- object$Age
-  idUnkAges <- sample(1:ndat, 20)
   for (ii in idUnkAges) {
     idi <- which(object$indID == sunID[ii])
     ranAges <- range(object$Age[idi])
@@ -730,31 +795,6 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
               minAge = minAge, UPDJUMP = UPDJUMP, jumpSD = jumpSD))
 }
 
-# Extract parameters specified by the user:
-.CreateUserPar <- function(argList) {
-  userPars <- list()
-  genParName <- c("theta", "gamma")
-  parTypes <- c("Start", "Jumps", "PriorMean", "PriorSd")
-  parTypesList <- c("start", "jump", "priorMean", "priorSd")
-  for (genPp in 1:2) {
-    if (all(genPp == 2 & inherits(covObj, c("fused", "propHaz"))) |
-        genPp == 1) {
-      userPars[[genParName[genPp]]] <- list()
-      for (pp in 1:4) {
-        usrPar <- sprintf("%s%s", genParName[genPp], parTypes[pp])
-        if (usrPar %in% names(argList)) {
-          userPars[[genParName[genPp]]][[parTypesList[pp]]] <- 
-            argList[[usrPar]]
-        } else {
-          userPars[[genParName[genPp]]][[parTypesList[pp]]] <- NULL 
-        }
-      }
-    }    
-  }
-  return(userPars)
-}
-
-
 # Prepare data object:
 .CreateDataObj <- function(object, algObj) {
   n <- nrow(object)
@@ -765,17 +805,13 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
     idages <- which(object$Age >= alpha & object$nParents > 0)
     idpar <- which(object$nParents[which(object$Age >= alpha)] > 0)
     x <- object$Age[idages] - alpha
+    y <- object$nOffspring
     dx <- diff(x[1:2])
     
-    # Adjust first age > 0 for certain models:
-    # if (algObj$model %in% c("gamma", "beta", "gammaMixture", "Hadwiger", 
-    #                  "HadwigerMixture")) {
-    #   x[which(x == 0)] <- 0.005
-    # }
-
     # Create data object:
-    do <- list(data = object, idages = idages, alpha = alpha, x = x,
-               xMax = max(x), n = n, dx = dx, idpar = idpar, AgeUpdate = FALSE)
+    do <- list(data = object, idages = idages, alpha = alpha, x = x, y = y,
+               xMax = max(x), n = n, dx = dx, idpar = idpar, AgeUpdate = FALSE,
+               offsUpdate = FALSE)
     class(do) <- "baftaAggr"
   } else if (algObj$dataType == "indivSimple") {
     if (is.na(algObj$minAge)) {
@@ -785,11 +821,7 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
     }
     x <- object$Age - alpha
     dx <- min(diff(sort(unique(x))))
-    # Adjust first age > 0 for certain models:
-    if (algObj$model %in% c("gamma", "beta", "gammaMixture", "Hadwiger", 
-                            "HadwigerMixture")) {
-      x[which(x == 0)] <- 0.005
-    }
+
     if (any(x < 0)) {
       warning("Some ages occur before minAge.", 
               "These records have been excluded from the analysis.\n", 
@@ -808,16 +840,35 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
                           object$Age != object$MaxAge)
       idAgeUpd <- which(unID %in% unique(object$indID[idUpd]))
       AgeUpdate <- TRUE
-      nUpd <- length(idAgeUpd)
+      nAgeUpd <- length(idAgeUpd)
+      idFirstAge <- sapply(idAgeUpd, function(iid) {
+        idi <- which(object$indID == unID[iid])
+        return(idi[which(object$Age[idi] == min(object$Age[idi]))])
+      })
     } else {
       idAgeUpd <- NA
       AgeUpdate <- FALSE
-      nUpd <- 0
+      nAgeUpd <- 0
+      idFirstAge <- NA
     }
-    do <- list(data = object, x = x, y = y, rMat = rMat, ni = ni, 
+    if ("obsProp" %in% colnames(object)) {
+      idOffsUpd <- which(object$obsProp < 1)
+      offsUpdate <- TRUE
+      nOffsUpd <- length(idOffsUpd)
+      object$estOffspring <- object$nOffspring
+      o <- object$nOffspring
+    } else {
+      idOffsUpd <- NA
+      offsUpdate <- FALSE
+      nOffsUpd <- 0
+      o <- NA
+    }
+    do <- list(data = object, x = x, y = y, o = o, rMat = rMat, ni = ni, 
                xMax = max(x), n = n, dx = dx, alpha = alpha, 
-               unID = unID, AgeUpdate = AgeUpdate, idUpd = idAgeUpd,
-               nUpd = nUpd)
+               unID = unID, AgeUpdate = AgeUpdate, idAgeUpd = idAgeUpd,
+               nAgeUpd = nAgeUpd, idFirstAge = idFirstAge, 
+               offsUpdate = offsUpdate, idOffsUpd = idOffsUpd, 
+               nOffsUpd = nOffsUpd)
     class(do) <- "baftaIndSimp"
   } else if (algObj$dataType == "indivExtended") {
     if (is.na(algObj$minAge)) {
@@ -866,17 +917,24 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
                        object$Age != object$MaxAge)
       idAgeUpd <- which(unID %in% unique(object$indID[idUpd]))
       AgeUpdate <- TRUE
-      nUpd <- length(idAgeUpd)
+      nAgeUpd <- length(idAgeUpd)
+      idFirstAge <- sapply(idAgeUpd, function(iid) {
+        idi <- which(object$indID == unID[iid])
+        return(idi[which(object$Age[idi] == min(object$Age[idi]))])
+      })
+      
     } else {
       idAgeUpd <- NA
       AgeUpdate <- FALSE
-      nUpd <- 0
+      nAgeUpd <- 0
+      idFirstAge <- NA
     }
     
     do <- list(data = object, x = x, y = y, rMat = rMat, ni = ni, 
                xMax = max(x), z = z, w = w, n = n, alpha = alpha, tau = tau,
                indv = idIBI, idv = idv, niv = niv, unID = unID, 
-               AgeUpdate = AgeUpdate, idUpd = idAgeUpd, nUpd = nUpd)
+               AgeUpdate = AgeUpdate, idAgeUpd = idAgeUpd, nAgeUpd = nAgeUpd,
+               idFirstAge = idFirstAge, offsUpdate = FALSE)
     class(do) <- "baftaIndExt"
   }
   return(do)
@@ -925,7 +983,7 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
     lowBe <- rep(0, 5)
     uppBe <- rep(Inf, 5)
     xMax <- ceiling(dataObj$xMax)
-    if (algObj$dataType == "aggregated") xMax <- xMax + 1
+    if (algObj$dataType %in% c("aggregated", "indivSimple")) xMax <- xMax + 1
     startBe <- c(10, 1.5, 2.5, 0, xMax)
     priorMeanBe <- c(10, 1.5, 2.5, 0, xMax)
     idSamp <- 1:3
@@ -967,7 +1025,7 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
   }
   priorSdBe <- rep(5, nBe)
   nameBe <- sprintf("b%s", 1:nBe - 1)
-  names(startBe) <- nameBe
+  names(startBe) <- names(priorMeanBe) <- names(priorSdBe) <- nameBe
   defaultBeta  <- list(beta = startBe, priorMean = priorMeanBe, 
                        priorSD = priorSdBe, p = nBe, name = nameBe, low = lowBe, 
                        upp = uppBe, idSamp = idSamp, pSamp = length(idSamp))
@@ -994,37 +1052,99 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
   #   uPrior1 <- 0.01
   #   uPrior2 <- 0.1
   # } 
-  theta <- c(defBet$beta, alpha = 0.1)
-  thetaPriorMean <- c(defBet$priorMean, alpha = 1)
-  thetaPriorSD <- c(defBet$priorSD, alpha = 5)
-  thetaLower <- c(defBet$low, alpha = 0)
-  thetaUpper <- c(defBet$upp, alpha = Inf)
+  theta <- c(defBet$beta, gamma = 0.1)
+  thetaPriorMean <- c(defBet$priorMean, gamma = 1)
+  thetaPriorSD <- c(defBet$priorSD, gamma = 5)
+  thetaLower <- c(defBet$low, gamma = 0)
+  thetaUpper <- c(defBet$upp, gamma = Inf)
   idSamp <- c(defBet$idSamp, defBet$p + 1)
-  
+  if (dataObj$AgeUpdate) {
+    agePriorSD <- 2
+  } else {
+    agePriorSD <- NA
+  }
+  if (algObj$dataType == "indivSimple" & dataObj$offsUpdate) {
+    offsPrior <- c(-5, 10)
+  } else {
+    offsPrior <- NA
+  }
   if (algObj$dataType == "indivExtended") {
     etaStart <- 1 / mean(dataObj$z[which(dataObj$data$First == 0)])
-    gammaStart <- 1 / mean(dataObj$w[which(dataObj$data$First == 1)])
-    theta <- c(theta, eta = etaStart, gamma = gammaStart)
-    thetaPriorMean <- c(thetaPriorMean, eta = 1, gamma = 1)
-    thetaPriorSD <- c(thetaPriorSD, eta = 1, gamma = 1)
-    thetaLower <- c(thetaLower, 0, 0)
-    thetaUpper <- c(thetaUpper, Inf, Inf)
+    kappaStart <- 1 / mean(dataObj$w[which(dataObj$data$First == 1)])
+    theta <- c(theta, eta = etaStart, kappa = kappaStart)
+    thetaPriorMean <- c(thetaPriorMean, eta = 1, kappa = 1)
+    thetaPriorSD <- c(thetaPriorSD, eta = 1, kappa = 1)
+    thetaLower <- c(thetaLower, eta = 0, kappa = 0)
+    thetaUpper <- c(thetaUpper, eta = Inf, kappa = Inf)
     idSamp <- c(defBet$idSamp, defBet$p + c(1:3))
 
     # Random effects for IBI:
     vSd <- 0.5
-    vPrior1 <- 0.01
+    vPrior1 <- 1
     vPrior2 <- 0.1
     
   } 
+  if (dataObj$AgeUpdate) {
+    agePriorSD <- 2
+  } else {
+    agePriorSD <- NA
+  }
   parList <- list(thetaStart = theta, thetaPriorMean = thetaPriorMean, 
                   thetaPriorSD = thetaPriorSD, thetaLower = thetaLower,
                   thetaUpper = thetaUpper, thetaName = names(theta),
                   p = length(theta), idSamp = idSamp, 
                   pSamp = length(idSamp), uSd = uSd, uPrior1 = uPrior1, 
                   uPrior2 = uPrior2, vSd = vSd, vPrior1 = vPrior1, 
-                  vPrior2 = vPrior2)
+                  vPrior2 = vPrior2, agePriorSD = agePriorSD, 
+                  offsPrior = offsPrior, agePriorSD = agePriorSD)
   return(parList)
+}
+
+# Extract parameters specified by the user:
+.CreateUserPar <- function(argList, argNames, parObj, dataObj) {
+  # Verify if starting parameters are specified:
+  if ("thetaStart" %in% argNames) {
+    if (length(argList$thetaStart) != parObj$p) {
+      stop(sprintf("Length of 'thetaStart' argument should be %s.\n", 
+                   parObj$p))
+    } else {
+      parObj$thetaStart <- argList$thetaStart
+      names(parObj$thetaStart) <- parObj$thetaName
+    }
+  }
+  
+  # Verify if mean priors are specified:
+  if ("thetaPriorMean" %in% argNames) {
+    if (length(argList$thetaPriorMean) != parObj$p) {
+      stop(sprintf("Length of 'thetaPriorMean' argument should be %s.\n", 
+                   parObj$p))
+    } else {
+      parObj$thetaPriorMean <- argList$thetaPriorMean
+      names(parObj$thetaPriorMean) <- parObj$thetaName
+    }
+  }
+  
+  # Verify if SD priors are specified:
+  if ("thetaPriorSD" %in% argNames) {
+    if (length(argList$thetaPriorSD) != parObj$p) {
+      stop(sprintf("Length of 'thetaPriorSD' argument should be %s.\n", 
+                   parObj$p))
+    } else {
+      parObj$thetaPriorSD <- argList$thetaPriorSD
+      names(parObj$thetaPriorSD) <- parObj$thetaName
+    }
+  }
+  
+  if ("agePriorSD" %in% argNames) {
+    if (length(argList$agePriorSD) == 1 | 
+        length(argList$agePriorSD) == nrow(dataObj$data)) {
+      parObj$agePriorSD <- argList$agePriorSD
+    } else {
+      stop(sprintf("Length of 'agePriorSD' argument should be 1 or equal to the number of rows in the dataset (i.e., %s).\n", 
+                   nrow(dataObj$data)))
+    }
+  }
+  return(parObj)
 }
 
 # ------------------------ #
@@ -1062,7 +1182,6 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
   q <- qnorm(p2, mean, sd)
   return(q)
 }
-
 
 # --------------------------- #
 # ---- Fertility models: ----
@@ -1266,10 +1385,10 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
   # lk <- dpois(dataObj$data$nOffspring[dataObj$idages], 
   #             lambda = dataObj$data$nParents[dataObj$idages] * fert, 
   #             log = TRUE)
-  rho <- pars$theta["alpha"] / (fert + pars$theta["alpha"])
+  rho <- pars$theta["gamma"] / (fert + pars$theta["gamma"])
   lk <- dnbinom(x = dataObj$data$nOffspring[dataObj$idages],
                 size = dataObj$data$nParents[dataObj$idages] *
-                  pars$theta["alpha"], prob = rho, log = TRUE)
+                  pars$theta["gamma"], prob = rho, log = TRUE)
   # ---------------------------------- #
   return(lk)
 }
@@ -1282,9 +1401,9 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
   # ----------------------------------- #
   # Use negative binomial (2023-12-11):
   fert <- FertFun(beta = pars$theta, x = dataObj$x + dataObj$dx / 2)
-  rho <- pars$theta["alpha"] / (fert + pars$theta["alpha"])
-  lk <- dnbinom(x = dataObj$data$nOffspring, 
-                size = pars$theta["alpha"], prob = rho, log = TRUE)
+  rho <- pars$theta["gamma"] / (fert + pars$theta["gamma"])
+  lk <- dnbinom(x = dataObj$y, 
+                size = pars$theta["gamma"], prob = rho, log = TRUE)
   # ---------------------------------- #
   return(lk)
 }
@@ -1298,13 +1417,13 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
   # ----------------------------------- #
   # Use negative binomial (2023-12-11):
   fert <- FertFun(beta = pars$theta, x = dataObj$x)
-  rho <- pars$theta["alpha"] / (fert + pars$theta["alpha"])
-  lk <- dnbinom(x = dataObj$data$nOffspring, size = pars$theta["alpha"],
+  rho <- pars$theta["gamma"] / (fert + pars$theta["gamma"])
+  lk <- dnbinom(x = dataObj$y, size = pars$theta["gamma"],
                 prob = rho, log = TRUE) +
     dexp(dataObj$z, rate = pars$theta["eta"] * 
            exp(c(dataObj$rMat %*% pars$v)), log = TRUE) * 
     (1 - dataObj$data$First) +
-    dexp(dataObj$w, rate = pars$theta["gamma"], log = TRUE) * 
+    dexp(dataObj$w, rate = pars$theta["kappa"], log = TRUE) * 
     dataObj$data$First
   return(lk)
 }
@@ -1371,7 +1490,7 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
 .SampleAges.baftaIndSimp <- function(dataObj, algObj) {
   dataObjUpd <- dataObj
   dataNew <- dataObj$data
-  for (iid in dataObj$idUpd) {
+  for (iid in dataObj$idAgeUpd) {
     id <- which(dataNew$indID == dataObj$unID[iid])
     updRan <- c(dataNew$MinAge[id[1]], dataNew$MaxAge[id[1]]) - 
       dataNew$Age[id[1]]
@@ -1395,7 +1514,7 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
 .SampleAges.baftaIndExt <- function(dataObj, algObj) {
   dataObjUpd <- dataObj
   dataNew <- dataObj$data
-  for (iid in dataObj$idUpd) {
+  for (iid in dataObj$idAgeUpd) {
     id <- which(dataNew$indID == dataObj$unID[iid])
     updRan <- c(dataNew$MinAge[id[1]], dataNew$MaxAge[id[1]]) - 
       dataNew$Age[id[1]]
@@ -1416,6 +1535,61 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
   dataObjUpd$w <- dataNew$Age - dataObj$alpha
   
   return(dataObjUpd)
+}
+
+.CalcHastingsRatioAges <- function(dataObjNew, dataObjNow, algObj) {
+  hrat <- rep(0, dataObj$nAgeUpd)
+  ide <- 0
+  for (iid in dataObj$idAgeUpd) {
+    ide <- ide + 1
+    id <- which(dataNew$indID == dataObj$unID[iid])
+    deltaAge <- dataObjNew$x[id[1]] - dataObjNow$x[id[1]]
+    updRan <- c(dataNew$MinAge[id[1]], dataNew$MaxAge[id[1]]) - 
+      dataNew$Age[id[1]]
+    hrat[ide] <- .dtnorm(deltaAge, mean = 0, sd = 1, lower = updRan[1],
+                        upper = updRan[2]) / 
+      .dtnorm(0, mean = deltaAge, sd = 1, lower = updRan[1],
+              upper = updRan[2])
+  }
+  return(hrat)
+}
+
+# Prior of partially observed offspring:
+.CalcPostOffs <- function(dataObj, parObj, like, FertFun, FertFun.numeric) {
+  ages <- dataObj$x[dataObj$idOffsUpd]
+  mu <- FertFun(parObj$thetaPriorMean, ages)
+  po <- dataObj$data$obsProp[dataObj$idOffsUpd]
+  o <- dataObj$o[dataObj$idOffsUpd]
+  y <- dataObj$y[dataObj$idOffsUpd]
+  priorOffs <- dnbinom(x = y - o, size = parObj$thetaPriorMean["gamma"],
+                       mu = mu * (1 - po), log = TRUE)
+  postOffs <- like[dataObj$idOffsUpd] + priorOffs
+  return(postOffs)
+}
+
+# Sample unknown ages:
+.SampleOffspring <- function(dataObj, ...) UseMethod(".SampleOffspring")
+
+.SampleOffspring.baftaAggr <- function(dataObj, ...) {
+  return(dataObj)
+}
+
+.SampleOffspring.baftaIndSimp <- function(dataObj, algObj) {
+  dataObjUpd <- dataObj
+  oObs <- dataObj$o
+  yNew <- dataObj$y
+  yNow <- dataObj$y
+  yNew[dataObj$idOffsUpd] <- round(.rtnorm(n = dataObj$nOffsUpd,
+                                           mean = yNow[dataObj$idOffsUpd],
+                                           sd = 1, 
+                                           lower = oObs[dataObj$idOffsUpd]))
+  dataObjUpd$data$estOffspring <- yNew
+  dataObjUpd$y <- yNew
+  return(dataObjUpd)
+}
+
+.SampleOffspring.baftaIndExt <- function(dataObj, ...) {
+  return(dataObj)
 }
 
 # Function to update jumps in MCMC:
@@ -1504,12 +1678,13 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
   postNow <- .CalcPostTheta(pars = parsNow, like = likeNow, 
                             parObj = parObj)
   
+  # If ages need to be updated:
   if (dataObj$AgeUpdate) {
     likeIndNow <- c(t(likeNow) %*% dataObj$rMat)
     
     # Prior for proposed ages:
     priorNow <- .dtnorm(x = dataObjNow$data$Age, 
-                        mean = dataObj$data$Age, sd = 2, 
+                        mean = dataObj$data$Age, sd = parObj$agePriorSD, 
                         lower = dataObj$data$MinAge, 
                         upper = dataObj$data$MaxAge, 
                         log = TRUE)
@@ -1520,6 +1695,14 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
     postIndNow <- likeIndNow + priorIndNow
     
   }
+  
+  # If offspring number needs to be updated (partial observations):
+  if (dataObj$offsUpdate) {
+    postOffsNow <- .CalcPostOffs(dataObj = dataObjNow, parObj = parObj, 
+                                 like = likeNow, FertFun = FertFun, 
+                                 FertFun.numeric = FertFun.numeric)
+  }
+  
   
   if (RANDEFFU) {
     postUNow <- .CalcPostRandEffU(dataObj = dataObjNow, pars = parsNow,
@@ -1546,24 +1729,39 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
     vOut <- NA
     vSdOut <- NA
     ageOut <- NA
+    offsOut <- NA
     
   } else {
-    parOut <- matrix(NA, nrow = niter, ncol = parObj$p,
-                     dimnames = list(NULL, parObj$thetaName))
+    pAll <- parObj$p
+    parNames <- parObj$thetaName
+    if (inherits(dataObj, "baftaIndExt")) {
+      pAll <- pAll + 1
+      parNames <- c(parNames, "vSd")
+    }
+    parOut <- matrix(NA, nrow = niter, ncol = pAll,
+                     dimnames = list(NULL, parNames))
     likePostOut <- matrix(NA, nrow = niter, ncol = 2,
                           dimnames = list(NULL, c("Likelihood", "Posterior")))
-    parOut[1, ] <- parsNow$theta
+    parOut[1, parObj$thetaName] <- parsNow$theta
+    if (inherits(dataObj, "baftaIndExt")) {
+      parOut[1, "vSd"] <- parsNow$vSd
+    }
     likePostOut[1, ] <- c(sum(likeNow), postNow)
     if (dataObj$AgeUpdate) {
-      ageOut <- matrix(NA, nrow = niter, ncol = dataObj$nUpd)
-      idFirstAge <- sapply(dataObj$idUpd, function(iid) {
-        idi <- which(dataObj$data$indID == dataObj$unID[iid])
-        return(idi[which(dataObj$data$Age[idi] == min(dataObj$data$Age[idi]))])
-      })
-      ageOut[1, ] <- dataObjNow$data$Age[idFirstAge]
+      ageOut <- matrix(NA, nrow = niter, ncol = dataObj$nAgeUpd)
+      ageOut[1, ] <- dataObjNow$data$Age[dataObj$idFirstAge]
     } else {
       ageOut <- NA
     }
+    
+    # If offspring number needs to be updated (partial observations):
+    if (dataObj$offsUpdate) {
+      offsOut <- matrix(NA, nrow = niter, ncol = dataObj$nOffsUpd)
+      offsOut[1, ] <- dataObjNow$y[dataObj$idOffsUpd]
+    } else {
+      offsOut <- NA
+    }
+    
     if (RANDEFFU) {
       uOut <- matrix(NA, nrow = niter, ncol = dataObj$ni)
       uOut[1, ] <- parsNow$u
@@ -1576,15 +1774,17 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
     if (RANDEFFV) {
       vOut <- matrix(NA, nrow = niter, ncol = dataObj$ni)
       vOut[1, ] <- parsNow$v
-      vSdOut <- rep(NA, niter)
-      vSdOut[1] <- parsNow$vSd
+      # vSdOut <- rep(NA, niter)
+      # vSdOut[1] <- parsNow$vSd
     } else {
       vOut <- NA
-      vSdOut <- NA
+      # vSdOut <- NA
     }
   }
   
+  # ----------- #
   # Start MCMC:
+  # ----------- #
   for (iter in 2:niter) {
     for (ip in parObj$idSamp) {
       idj <- which(parObj$idSamp == ip)
@@ -1613,7 +1813,6 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
     }
     
     # Random effects fertility:
-    
     if (RANDEFFU & iter / 2 == floor(iter / 2)) {
       postUNow <- .CalcPostRandEffU(dataObj = dataObjNow, pars = parsNow,
                                     like = likeNow)
@@ -1651,7 +1850,7 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
       # Sample U values:
       parsNew <- parsNow
       parsNew$v[dataObj$idv] <- rnorm(n = dataObj$niv, 
-                                      mean = parsNow$v[dataObj$idv], sd = 0.1)
+                                      mean = parsNow$v[dataObj$idv], sd = 0.2)
       likeNew <- .CalcLikeFert(dataObj = dataObjNow, pars = parsNew, 
                                FertFun = FertFun, 
                                FertFun.numeric = FertFun.numeric)
@@ -1681,7 +1880,6 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
       
     } 
     
-    
     # Sample unknown ages:
     if (dataObj$AgeUpdate) {
       # Update individual likelihood:
@@ -1703,7 +1901,7 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
       
       # Prior for proposed ages:
       priorNew <- .dtnorm(x = dataObjNew$data$Age, 
-                          mean = dataObj$data$Age, sd = 2, 
+                          mean = dataObj$data$Age, sd = parObj$agePriorSD, 
                           lower = dataObj$data$MinAge, 
                           upper = dataObj$data$MaxAge, 
                           log = TRUE)
@@ -1713,8 +1911,8 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
       # Posterior for proposed ages:
       postIndNew <- likeIndNew + priorIndNew
       postRatio <- exp(postIndNew - postIndNow)
-      idUpd <- dataObj$idUpd[which(postRatio[dataObj$idUpd] > 
-                                     runif(n = dataObj$nUpd))]
+      idUpd <- dataObj$idAgeUpd[which(postRatio[dataObj$idAgeUpd] > 
+                                     runif(n = dataObj$nAgeUpd))]
       if (length(idUpd) > 0) {
         idUpdAll <- which(dataObj$data$indID %in% dataObj$unID[idUpd])
         postIndNow[idUpd] <- postIndNew[idUpd]
@@ -1732,6 +1930,46 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
       }
     }
     
+    # Sample unknown number of offspring:
+    if (dataObj$offsUpdate) {
+      # Update current prior and posterior:
+      postOffsNow <- .CalcPostOffs(dataObj = dataObjNow, parObj = parObj, 
+                                     like = likeNow, FertFun = FertFun, 
+                                     FertFun.numeric = FertFun.numeric)
+
+      # Sample new number of offspring:
+      dataObjNew <- .SampleOffspring(dataObj = dataObjNow, algObj = algObj)
+      
+      # Calculate likelihood and posteriors:
+      likeNew <- .CalcLikeFert(dataObj = dataObjNew, pars = parsNow, 
+                               FertFun = FertFun, 
+                               FertFun.numeric = FertFun.numeric)
+      
+      postOffsNew <- .CalcPostOffs(dataObj = dataObjNew, parObj = parObj, 
+                                   like = likeNew, FertFun = FertFun, 
+                                   FertFun.numeric = FertFun.numeric)
+      mhRatio <- .dtnorm(x = dataObjNow$y[dataObj$idOffsUpd],
+                           mean = dataObjNew$y[dataObj$idOffsUpd],
+                           sd = 1, 
+                           lower = dataObj$o[dataObj$idOffsUpd], log = TRUE) -
+        .dtnorm(x = dataObjNew$y[dataObj$idOffsUpd],
+                mean = dataObjNow$y[dataObj$idOffsUpd],
+                sd = 1, 
+                lower = dataObj$o[dataObj$idOffsUpd], log = TRUE)
+      
+      postRatio <- exp(postOffsNew - postOffsNow + mhRatio)
+      idUpd <- which(postRatio > runif(n = dataObj$nOffsUpd))
+      if (length(idUpd) > 0) {
+        idUpdAll <- dataObj$idOffsUpd[idUpd]
+        likeNow[idUpdAll] <- likeNew[idUpdAll]
+        postOffsNow[idUpd] <- postOffsNew[idUpd]
+        dataObjNow$y[idUpdAll] <- dataObjNew$y[idUpdAll]
+        dataObjNow$data$estOffspring[idUpdAll] <- dataObjNew$y[idUpdAll]
+        postNow <- .CalcPostTheta(pars = parsNow, like = likeNow, 
+                                  parObj = parObj)
+      }
+    }
+
     # Update jumps:
     if (UPDJUMP) {
       if (iter %in% updJumpIter) {
@@ -1740,10 +1978,16 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
         jumpOut <- rbind(jumpOut, jumpSD)
       }
     } else {
-      parOut[iter, ] <- parsNow$theta
+      parOut[iter, parObj$thetaName] <- parsNow$theta
+      if (inherits(dataObj, "baftaIndExt")) {
+        parOut[iter, "vSd"] <- parsNow$vSd
+      }
       likePostOut[iter, ] <- c(sum(likeNow), postNow)
       if (dataObj$AgeUpdate) {
-        ageOut[iter, ] <- dataObjNow$data$Age[idFirstAge]
+        ageOut[iter, ] <- dataObjNow$data$Age[dataObj$idFirstAge]
+      }
+      if (dataObj$offsUpdate) {
+        offsOut[iter, ] <- dataObjNow$y[dataObj$idOffsUpd]
       }
       if (RANDEFFU) {
         uOut[iter, ] <- parsNow$u
@@ -1751,7 +1995,7 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
       }
       if (RANDEFFV) {
         vOut[iter, ] <- parsNow$v
-        vSdOut[iter] <- parsNow$vSd
+        # vSdOut[iter] <- parsNow$vSd
       }
     }
   }
@@ -1766,9 +2010,8 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
     jumpOut <- NA
   }
   outList <- list(theta = parOut, likePost = likePostOut, u = uOut,
-                  uSd = uSdOut, v = vOut, vSd = vSdOut, age = ageOut,
-                  jumps = jumpSdFin, jumpMat = jumpOut) 
-  compEnd <- Sys.time()
+                  uSd = uSdOut, v = vOut, age = ageOut,
+                  offsOut = offsOut, jumps = jumpSdFin, jumpMat = jumpOut) 
   return(outList)
 }
 
@@ -1830,7 +2073,6 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
   return(neff)
 }
 
-
 # Calculate DIC:
 .CalcDIC <- function(likelihood, k) {
   L <- length(likelihood)
@@ -1845,7 +2087,8 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
 
 # Y predicted:
 .CalcYpred <- function(dataObj, ...) UseMethod(".CalcYpred")
-.CalcYpred.baftaAggr <- function(dataObj, thetaMat, uMat, FertFun, 
+.CalcYpred.baftaAggr <- function(dataObj, thetaMat, uMat, ageMat, 
+                                 offsMat, parObj, FertFun, 
                                  FertFun.numeric) {
   x <- dataObj$x
   
@@ -1863,9 +2106,9 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
     fert <- FertFun(beta = be, x = x + 0.5)
     # ------------------------------ #
     # Negative binomial 2023-11-14:
-    rho <- be["alpha"] / (fert + be["alpha"])
+    rho <- be["gamma"] / (fert + be["gamma"])
     yp <- rep(NA, nytot)
-    yp[dataObj$idpar] <- rnbinom(n = ny, size = nx * be["alpha"], prob = rho)
+    yp[dataObj$idpar] <- rnbinom(n = ny, size = nx * be["gamma"], prob = rho)
     # ------------------------------ #
     # yp <- rpois(n = ny, lambda = nx * fert)
     return(yp)
@@ -1874,46 +2117,74 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
   return(yPred)
 }
 
-.CalcYpred.baftaIndSimp <- function(dataObj, thetaMat, uMat, FertFun, 
+.CalcYpred.baftaIndSimp <- function(dataObj, thetaMat, uMat, ageMat, 
+                                    offsMat, parObj, FertFun, 
                                     FertFun.numeric) {
   # Calculate estimated fertility from parameter posteriors:
   nth <- nrow(thetaMat)
-  yPred <- t(apply(thetaMat, 1, function(be) {
-    # be <- thetaMat[ith, ]
-    # fert <-  FertFun(beta = the, x = dataObj$x) * 
-    #   exp(c(dataObj$rMat %*% uMat[ith, ]))
-    # yp <- rpois(n = dataObj$n, lambda = fert)
-    # ------------------------------ #
-    # Negative binomial 2023-11-14:
-    fert <-  FertFun(beta = be, x = dataObj$x)
-    rho <- be["alpha"] / (fert + be["alpha"])
-    yp <- rnbinom(n = dataObj$n, size = be["alpha"], prob = rho)
-    # ------------------------------ #
+  if (dataObj$AgeUpdate) {
+    yPred <- t(sapply(1:nth, function(ith) {
+      be <- thetaMat[ith, ]
+      x <- ageMat[ith, ] + 0.5
+      fert <-  FertFun(beta = be, x = x)
+      rho <- be["gamma"] / (fert + be["gamma"])
+      yp <- rnbinom(n = dataObj$n, size = be["gamma"], prob = rho)
+      return(yp)
+    }))
+  } else if (dataObj$offsUpdate) {
+    ages <- dataObj$x[dataObj$idOffsUpd]
+    mu <- FertFun(parObj$thetaPriorMean, ages)
+    po <- dataObj$data$obsProp[dataObj$idOffsUpd]
     
-    return(yp)
-  }))
-  
+    yPred <- t(sapply(1:nth, function(ith) {
+      be <- thetaMat[ith, ]
+      o <- offsMat[ith, ]
+      fert <-  FertFun(beta = be, x = dataObj$x + 0.5)
+      rho <- be["gamma"] / (fert + be["gamma"])
+      yp <- rnbinom(n = dataObj$n, size = be["gamma"], prob = rho)
+      op <- yp
+      op[dataObj$idOffsUpd] <- yp[dataObj$idOffsUpd] - 
+        rnbinom(n = dataObj$nOffsUpd, 
+                size = parObj$thetaPriorMean["gamma"], 
+                mu = mu * (1 - po))
+      return(op)
+    }))
+    
+  } else {
+    yPred <- t(apply(thetaMat, 1, function(be) {
+      fert <-  FertFun(beta = be, x = dataObj$x + 0.5)
+      rho <- be["gamma"] / (fert + be["gamma"])
+      yp <- rnbinom(n = dataObj$n, size = be["gamma"], prob = rho)
+      return(yp)
+    }))
+  }
   return(yPred)
 }
 
-.CalcYpred.baftaIndExt <- function(dataObj, thetaMat, uMat, FertFun, 
+.CalcYpred.baftaIndExt <- function(dataObj, thetaMat, uMat, ageMat, 
+                                   offsMat, parObj, FertFun, 
                                    FertFun.numeric) {
   # Calculate estimated fertility from parameter posteriors:
   nth <- nrow(thetaMat)
-  yPred <- t(apply(thetaMat, 1, function(be) {
-    # fert <-  FertFun(beta = the, x = dataObj$x) * 
-    #   exp(c(dataObj$rMat %*% uMat[ith, ]))
-    # yp <- rpois(n = dataObj$n, lambda = fert)
-    # ------------------------------ #
-    # Negative binomial 2023-11-14:
-    fert <-  FertFun(beta = be, x = dataObj$x)
-    rho <- be["alpha"] / (fert + be["alpha"])
-    yp <- rnbinom(n = dataObj$n, size = be["alpha"], prob = rho)
-    # ------------------------------ #
+  if (dataObj$AgeUpdate) {
+    yPred <- t(sapply(1:nth, function(ith) {
+      be <- thetaMat[ith, ]
+      x <- ageMat[ith, ]
+      fert <-  FertFun(beta = be, x = x)
+      rho <- be["gamma"] / (fert + be["gamma"])
+      yp <- rnbinom(n = dataObj$n, size = be["gamma"], prob = rho)
+      return(yp)
+    }))
     
-    return(yp)
-  }))
-  
+  } else {
+    yPred <- t(apply(thetaMat, 1, function(be) {
+      fert <-  FertFun(beta = be, x = dataObj$x)
+      rho <- be["gamma"] / (fert + be["gamma"])
+      yp <- rnbinom(n = dataObj$n, size = be["gamma"], prob = rho)
+      return(yp)
+    }))
+    
+  }
   return(yPred)
 }
 
