@@ -262,7 +262,7 @@ bafta.default <- function(object, dataType = "aggregated",
     agesID <- object$indID[dataObj$idFirstAge]
     
     # Summary of age estimation:
-    ageQuant <- cbind(indID = agesID, Mean = apply(ageMat, 2, mean),
+    ageQuant <- data.frame(indID = agesID, Mean = apply(ageMat, 2, mean),
                       SD = apply(ageMat, 2, sd),
                       Lower = apply(ageMat, 2, quantile, prob = 0.025, 
                                     names = FALSE),
@@ -301,7 +301,7 @@ bafta.default <- function(object, dataType = "aggregated",
     offsID <- object$indID[dataObj$idOffsUpd]
     
     # Summary of age estimation:
-    offsQuant <- cbind(indID = offsID, Mean = apply(offsMat, 2, mean),
+    offsQuant <- data.frame(indID = offsID, Mean = apply(offsMat, 2, mean),
                        SD = apply(offsMat, 2, sd),
                        Lower = apply(offsMat, 2, quantile, prob = 0.025, 
                                      names = FALSE),
@@ -320,7 +320,8 @@ bafta.default <- function(object, dataType = "aggregated",
   
   # Y predicted:
   yPred <- .CalcYpred(dataObj = dataObj, thetaMat = thetaMat, uMat = uMat,
-                      ageMat = fullAgeMat, FertFun = FertFun, 
+                      ageMat = fullAgeMat, offsMat = fullOffsMat, 
+                      parObj = parObj, FertFun = FertFun, 
                       FertFun.numeric = FertFun.numeric)
   
   # Calculate predictive loss:
@@ -432,7 +433,7 @@ bafta.default <- function(object, dataType = "aggregated",
   fullOut <- list(coefficients = coeffs, x = xv, fert = fertQuant, 
                   theta = thetaMat, uSd = uSdVec, 
                   likePost = likeMat, DIC = DIC, PredLoss = PredLoss, 
-                  pred = predQuant, ages = ageQuant, estOffs = offsQuant, 
+                  pred = predQuant, estAges = ageQuant, estOffs = offsQuant, 
                   aggrData = aggrData, runs = outMCMC, data = dataObj, 
                   settings = settings, keep = keep, params = parObj)
   
@@ -1106,7 +1107,7 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
   if ("thetaStart" %in% argNames) {
     if (length(argList$thetaStart) != parObj$p) {
       stop(sprintf("Length of 'thetaStart' argument should be %s.\n", 
-                   parObj$p))
+                   parObj$p), call. = FALSE)
     } else {
       parObj$thetaStart <- argList$thetaStart
       names(parObj$thetaStart) <- parObj$thetaName
@@ -1117,7 +1118,7 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
   if ("thetaPriorMean" %in% argNames) {
     if (length(argList$thetaPriorMean) != parObj$p) {
       stop(sprintf("Length of 'thetaPriorMean' argument should be %s.\n", 
-                   parObj$p))
+                   parObj$p), call. = FALSE)
     } else {
       parObj$thetaPriorMean <- argList$thetaPriorMean
       names(parObj$thetaPriorMean) <- parObj$thetaName
@@ -1128,7 +1129,7 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
   if ("thetaPriorSD" %in% argNames) {
     if (length(argList$thetaPriorSD) != parObj$p) {
       stop(sprintf("Length of 'thetaPriorSD' argument should be %s.\n", 
-                   parObj$p))
+                   parObj$p), call. = FALSE)
     } else {
       parObj$thetaPriorSD <- argList$thetaPriorSD
       names(parObj$thetaPriorSD) <- parObj$thetaName
@@ -1141,7 +1142,7 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
       parObj$agePriorSD <- argList$agePriorSD
     } else {
       stop(sprintf("Length of 'agePriorSD' argument should be 1 or equal to the number of rows in the dataset (i.e., %s).\n", 
-                   nrow(dataObj$data)))
+                   nrow(dataObj$data)), call. = FALSE)
     }
   }
   return(parObj)
@@ -1395,27 +1396,16 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
 
 .CalcLikeFert.baftaIndSimp <- function(dataObj, pars, FertFun, 
                                        FertFun.numeric) {
-  # fert <- FertFun(beta = pars$theta, x = dataObj$x) * 
-  #   exp(c(dataObj$rMat %*% pars$u))
-  # lk <- dpois(dataObj$data$nOffspring, lambda = fert, log = TRUE)
-  # ----------------------------------- #
-  # Use negative binomial (2023-12-11):
   fert <- FertFun(beta = pars$theta, x = dataObj$x + dataObj$dx / 2)
   rho <- pars$theta["gamma"] / (fert + pars$theta["gamma"])
   lk <- dnbinom(x = dataObj$y, 
                 size = pars$theta["gamma"], prob = rho, log = TRUE)
-  # ---------------------------------- #
   return(lk)
 }
 
 # Likelihood function:
 .CalcLikeFert.baftaIndExt <- function(dataObj, pars, FertFun, 
                                       FertFun.numeric) {
-  # fert <- FertFun(beta = pars$theta, x = dataObj$x) * 
-  #   exp(c(dataObj$rMat %*% pars$u))
-  # lk <- dpois(dataObj$data$nOffspring, lambda = fert, log = TRUE) +
-  # ----------------------------------- #
-  # Use negative binomial (2023-12-11):
   fert <- FertFun(beta = pars$theta, x = dataObj$x)
   rho <- pars$theta["gamma"] / (fert + pars$theta["gamma"])
   lk <- dnbinom(x = dataObj$y, size = pars$theta["gamma"],
@@ -2147,6 +2137,7 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
         rnbinom(n = dataObj$nOffsUpd, 
                 size = parObj$thetaPriorMean["gamma"], 
                 mu = mu * (1 - po))
+      op[which(op < 0)] <- 0
       return(op)
     }))
     
