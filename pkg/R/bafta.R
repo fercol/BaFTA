@@ -1086,7 +1086,12 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
     
   } 
   if (dataObj$AgeUpdate) {
-    agePriorSD <- 2
+    idSdAge <- which(dataObj$data$indID %in% dataObj$unID[dataObj$idAgeUpd] & 
+                       1:dataObj$n %in% dataObj$idFirstAge)
+    agePriorSD <- mean(c(dataObj$data$MaxAge - 
+                           dataObj$data$MinAge)[idSdAge] / 2) / 
+      qnorm(0.999)
+    # agePriorSD <- 2
   } else {
     agePriorSD <- NA
   }
@@ -1097,7 +1102,7 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
                   pSamp = length(idSamp), uSd = uSd, uPrior1 = uPrior1, 
                   uPrior2 = uPrior2, vSd = vSd, vPrior1 = vPrior1, 
                   vPrior2 = vPrior2, agePriorSD = agePriorSD, 
-                  offsPrior = offsPrior, agePriorSD = agePriorSD)
+                  offsPrior = offsPrior)
   return(parList)
 }
 
@@ -1141,7 +1146,7 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
         length(argList$agePriorSD) == nrow(dataObj$data)) {
       parObj$agePriorSD <- argList$agePriorSD
     } else {
-      stop(sprintf("Length of 'agePriorSD' argument should be 1 or equal to the number of rows in the dataset (i.e., %s).\n", 
+      stop(sprintf("Argument 'agePriorSD' should be of length one or equal to the number of rows in the dataset (i.e., %s).\n", 
                    nrow(dataObj$data)), call. = FALSE)
     }
   }
@@ -2214,6 +2219,4 @@ CalcMinMaxAge <- function(object, minAge, maxAge, unkAgeID = NULL) {
   return(devMat)
 }
 
-# ============= #
-# ==== END ====
-# ============= #
+# ============================= END OF CODE ================================== #
