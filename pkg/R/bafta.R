@@ -543,6 +543,10 @@ summary.bafta <- function(object, ...) {
 
 # Plotting function:
 plot.bafta <- function(x, type = "traces", ...) {
+  # User par settings:
+  oldpar <- par(no.readonly = TRUE)
+  on.exit(par(oldpar))
+  
   argList <- list(...)
   plTypes <- c("traces", "density", "fertility", "predictive")
   if (!type %in% plTypes) {
